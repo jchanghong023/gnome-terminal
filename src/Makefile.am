@@ -72,6 +72,8 @@ gnome_terminal_server_SOURCES = \
 	terminal-prefs.h \
 	terminal-profiles-list.c \
 	terminal-profiles-list.h \
+	terminal-project-sidebar.c \
+	terminal-project-sidebar.h \
 	terminal-regex.h \
 	terminal-schemas.h \
 	terminal-settings-list.c \

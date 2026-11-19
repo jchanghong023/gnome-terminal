@@ -37,6 +37,7 @@
 #include "terminal-mdi-container.h"
 #include "terminal-menu-button.h"
 #include "terminal-notebook.h"
+#include "terminal-project-sidebar.h"
 #include "terminal-schemas.h"
 #include "terminal-screen-container.h"
 #include "terminal-search-popover.h"
@@ -2164,7 +2165,13 @@ terminal_window_init (TerminalWindow *window)
                       G_CALLBACK (handle_tab_droped_on_desktop), window);
   }
 
-  gtk_box_pack_end (GTK_BOX (priv->main_vbox), GTK_WIDGET (priv->mdi_container), TRUE, TRUE, 0);
+  GtkWidget *content = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *sidebar = terminal_project_sidebar_new (window, priv->mdi_container);
+
+  gtk_box_pack_start (GTK_BOX (content), sidebar, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (content), GTK_WIDGET (priv->mdi_container), TRUE, TRUE, 0);
+  gtk_box_pack_end (GTK_BOX (priv->main_vbox), content, TRUE, TRUE, 0);
+  gtk_widget_show (content);
   gtk_widget_show (GTK_WIDGET (priv->mdi_container));
 
   priv->old_char_width = -1;

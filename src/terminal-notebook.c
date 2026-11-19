@@ -64,6 +64,11 @@ update_tab_visibility (TerminalNotebook *notebook,
   if (gtk_widget_in_destruction (GTK_WIDGET (notebook)))
     return;
 
+  if (gtk_notebook_get_tab_pos (gtk_notebook) == GTK_POS_LEFT) {
+    gtk_notebook_set_show_tabs (gtk_notebook, FALSE);
+    return;
+  }
+
   new_n_pages = gtk_notebook_get_n_pages (gtk_notebook) + change;
   /* Don't do anything if we're going to have zero pages (and thus close the window) */
   if (new_n_pages == 0)
@@ -86,6 +91,14 @@ update_tab_visibility (TerminalNotebook *notebook,
   }
 
   gtk_notebook_set_show_tabs (gtk_notebook, show_tabs);
+}
+
+static void
+tab_position_changed_cb (GtkNotebook *notebook,
+                         GParamSpec *pspec,
+                         gpointer user_data)
+{
+  update_tab_visibility (TERMINAL_NOTEBOOK (notebook), 0);
 }
 
 static void
@@ -478,7 +491,6 @@ terminal_notebook_constructed (GObject *object)
 
   settings = terminal_app_get_global_settings (terminal_app_get ());
 
-  update_tab_visibility (TERMINAL_NOTEBOOK (notebook), 0);
   g_settings_bind (settings,
                    TERMINAL_SETTING_TAB_POLICY_KEY,
                    object,
@@ -490,6 +502,9 @@ terminal_notebook_constructed (GObject *object)
                    object,
                    "tab-pos",
                    G_SETTINGS_BIND_GET | G_SETTINGS_BIND_NO_SENSITIVITY);
+  g_signal_connect (notebook, "notify::tab-pos",
+                    G_CALLBACK (tab_position_changed_cb), NULL);
+  update_tab_visibility (TERMINAL_NOTEBOOK (notebook), 0);
 
   gtk_notebook_set_scrollable (notebook, TRUE);
   gtk_notebook_set_show_border (notebook, FALSE);

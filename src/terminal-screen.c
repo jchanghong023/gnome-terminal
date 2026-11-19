@@ -102,6 +102,7 @@ enum
   SHOW_POPUP_MENU,
   MATCH_CLICKED,
   CLOSE_SCREEN,
+  INITIAL_DIRECTORY_CHANGED,
   LAST_SIGNAL
 };
 
@@ -534,6 +535,12 @@ terminal_screen_class_init (TerminalScreenClass *klass)
                   G_TYPE_NONE,
                   0);
 
+  signals[INITIAL_DIRECTORY_CHANGED] =
+    g_signal_new (I_("initial-directory-changed"),
+                  G_OBJECT_CLASS_TYPE (object_class),
+                  G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL,
+                  G_TYPE_NONE, 0);
+
   g_object_class_install_property
     (object_class,
      PROP_PROFILE,
@@ -740,8 +747,11 @@ terminal_screen_exec (TerminalScreen *screen,
   terminal_screen_set_initial_environment (screen, envv);
   terminal_screen_set_override_command (screen, argv, shell);
 
-  g_free (priv->initial_working_directory);
-  priv->initial_working_directory = g_strdup (cwd);
+  if (g_strcmp0 (priv->initial_working_directory, cwd) != 0) {
+    g_free (priv->initial_working_directory);
+    priv->initial_working_directory = g_strdup (cwd);
+    g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
+  }
 
   if (fd_list) {
     const int *fds;
@@ -1641,6 +1651,12 @@ terminal_screen_button_press (GtkWidget      *widget,
     return button_press_event (widget, event);
 
   return FALSE;
+}
+
+const char *
+terminal_screen_get_initial_directory (TerminalScreen *screen)
+{
+  return screen->priv->initial_working_directory;
 }
 
 /**

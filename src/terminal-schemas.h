@@ -79,6 +79,7 @@ G_BEGIN_DECLS
 #define TERMINAL_SETTING_ENABLE_MNEMONICS_KEY           "mnemonics-enabled"
 #define TERMINAL_SETTING_ENABLE_SHORTCUTS_KEY           "shortcuts-enabled"
 #define TERMINAL_SETTING_NEW_TERMINAL_MODE_KEY          "new-terminal-mode"
+#define TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY         "project-directories"
 #define TERMINAL_SETTING_SCHEMA_VERSION                 "schema-version"
 #define TERMINAL_SETTING_SHELL_INTEGRATION_KEY          "shell-integration-enabled"
 #define TERMINAL_SETTING_TAB_POLICY_KEY                 "tab-policy"

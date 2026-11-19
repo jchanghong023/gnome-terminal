@@ -26,5 +26,6 @@ src/terminal-prefs.c
 src/terminal-screen.c
 src/terminal-search-popover.c
 src/terminal-tab-label.c
+src/terminal-project-sidebar.c
 src/terminal-util.c
 src/terminal-window.c

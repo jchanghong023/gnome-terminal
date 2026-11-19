@@ -107,6 +107,7 @@ const char* terminal_screen_get_title          (TerminalScreen *screen);
 const char* terminal_screen_get_icon_title     (TerminalScreen *screen);
 gboolean    terminal_screen_get_icon_title_set (TerminalScreen *screen);
 
+const char *terminal_screen_get_initial_directory (TerminalScreen *screen);
 char *terminal_screen_get_current_dir (TerminalScreen *screen);
 
 void       terminal_screen_get_size (TerminalScreen *screen,
