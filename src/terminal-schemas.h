@@ -33,7 +33,6 @@ G_BEGIN_DECLS
 #define TERMINAL_PROFILE_ALLOW_BOLD_KEY                 "allow-bold"
 #define TERMINAL_PROFILE_AUDIBLE_BELL_KEY               "audible-bell"
 #define TERMINAL_PROFILE_BOLD_IS_BRIGHT_KEY             "bold-is-bright"
-#define TERMINAL_PROFILE_BACKGROUND_COLOR_KEY           "background-color"
 #define TERMINAL_PROFILE_BACKSPACE_BINDING_KEY          "backspace-binding"
 #define TERMINAL_PROFILE_BOLD_COLOR_KEY                 "bold-color"
 #define TERMINAL_PROFILE_BOLD_COLOR_SAME_AS_FG_KEY      "bold-color-same-as-fg"
@@ -52,7 +51,6 @@ G_BEGIN_DECLS
 #define TERMINAL_PROFILE_ENCODING_KEY                   "encoding"
 #define TERMINAL_PROFILE_EXIT_ACTION_KEY                "exit-action"
 #define TERMINAL_PROFILE_FONT_KEY                       "font"
-#define TERMINAL_PROFILE_FOREGROUND_COLOR_KEY           "foreground-color"
 #define TERMINAL_PROFILE_HIGHLIGHT_COLORS_SET_KEY       "highlight-colors-set"
 #define TERMINAL_PROFILE_HIGHLIGHT_BACKGROUND_COLOR_KEY "highlight-background-color"
 #define TERMINAL_PROFILE_HIGHLIGHT_FOREGROUND_COLOR_KEY "highlight-foreground-color"
@@ -69,7 +67,6 @@ G_BEGIN_DECLS
 #define TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY         "use-custom-command"
 #define TERMINAL_PROFILE_USE_SKEY_KEY                   "use-skey"
 #define TERMINAL_PROFILE_USE_SYSTEM_FONT_KEY            "use-system-font"
-#define TERMINAL_PROFILE_USE_THEME_COLORS_KEY           "use-theme-colors"
 #define TERMINAL_PROFILE_VISIBLE_NAME_KEY               "visible-name"
 #define TERMINAL_PROFILE_WORD_CHAR_EXCEPTIONS_KEY       "word-char-exceptions"
 
@@ -84,7 +81,6 @@ G_BEGIN_DECLS
 #define TERMINAL_SETTING_SHELL_INTEGRATION_KEY          "shell-integration-enabled"
 #define TERMINAL_SETTING_TAB_POLICY_KEY                 "tab-policy"
 #define TERMINAL_SETTING_TAB_POSITION_KEY               "tab-position"
-#define TERMINAL_SETTING_THEME_VARIANT_KEY              "theme-variant"
 
 #define TERMINAL_SETTINGS_LIST_LIST_KEY                 "list"
 #define TERMINAL_SETTINGS_LIST_DEFAULT_KEY              "default"

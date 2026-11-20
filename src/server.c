@@ -146,6 +146,9 @@ init_server (int argc,
   g_set_prgname ("gnome-terminal-server");
   g_set_application_name (_("Terminal"));
 
+  /* Select the dark variant explicitly, even when the desktop theme is light. */
+  g_setenv ("GTK_THEME", "Adwaita:dark", TRUE);
+
   GError *error = NULL;
   if (!gtk_init_with_args (&argc, &argv, NULL, options, NULL, &error)) {
     if (error != NULL) {

@@ -104,6 +104,8 @@ void         terminal_screen_set_initial_environment (TerminalScreen  *screen,
 char **      terminal_screen_get_initial_environment (TerminalScreen  *screen);
 
 const char* terminal_screen_get_title          (TerminalScreen *screen);
+void        terminal_screen_set_custom_title   (TerminalScreen *screen,
+                                                const char *title);
 const char* terminal_screen_get_icon_title     (TerminalScreen *screen);
 gboolean    terminal_screen_get_icon_title_set (TerminalScreen *screen);
 

@@ -59,8 +59,6 @@
 
 #define SYSTEM_PROXY_SETTINGS_SCHEMA            "org.gnome.system.proxy"
 
-#define GTK_SETTING_PREFER_DARK_THEME           "gtk-application-prefer-dark-theme"
-
 #define GTK_DEBUG_SETTING_SCHEMA                "org.gtk.Settings.Debug"
 #define GTK_DEBUG_ENABLE_INSPECTOR_KEY          "enable-inspector-keybinding"
 #define GTK_DEBUG_ENABLE_INSPECTOR_TYPE         G_VARIANT_TYPE_BOOLEAN
@@ -354,25 +352,6 @@ terminal_app_remove_profile (TerminalApp *app,
   gs_free char *uuid = terminal_settings_list_dup_uuid_from_child (app->profiles_list, profile);
   terminal_settings_list_remove_child (app->profiles_list, uuid);
 }
-
-#if GTK_CHECK_VERSION (3, 19, 0)
-static void
-terminal_app_theme_variant_changed_cb (GSettings   *settings,
-                                       const char  *key,
-                                       GtkSettings *gtk_settings)
-{
-  TerminalThemeVariant theme;
-
-  theme = g_settings_get_enum (settings, key);
-  if (theme == TERMINAL_THEME_VARIANT_SYSTEM)
-    gtk_settings_reset_property (gtk_settings, GTK_SETTING_PREFER_DARK_THEME);
-  else
-    g_object_set (gtk_settings,
-                  GTK_SETTING_PREFER_DARK_THEME,
-                  theme == TERMINAL_THEME_VARIANT_DARK,
-                  NULL);
-}
-#endif /* GTK+ 3.19 */
 
 /* Submenus for New Terminal per profile, and to change profiles */
 
@@ -759,16 +738,6 @@ terminal_app_init (TerminalApp *app)
   app->gtk_debug_settings = terminal_g_settings_new (GTK_DEBUG_SETTING_SCHEMA,
                                                      GTK_DEBUG_ENABLE_INSPECTOR_KEY,
                                                      GTK_DEBUG_ENABLE_INSPECTOR_TYPE);
-
-#if GTK_CHECK_VERSION (3, 19, 0)
-  GtkSettings *gtk_settings = gtk_settings_get_default ();
-  terminal_app_theme_variant_changed_cb (app->global_settings,
-                                         TERMINAL_SETTING_THEME_VARIANT_KEY, gtk_settings);
-  g_signal_connect (app->global_settings,
-                    "changed::" TERMINAL_SETTING_THEME_VARIANT_KEY,
-                    G_CALLBACK (terminal_app_theme_variant_changed_cb),
-                    gtk_settings);
-#endif /* GTK+ 3.19 */
 
   /* Clipboard targets */
   GdkDisplay *display = gdk_display_get_default ();

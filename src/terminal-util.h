@@ -78,9 +78,6 @@ GSettings *terminal_g_settings_new (const char *schema_id,
 const GdkRGBA *terminal_g_settings_get_rgba (GSettings  *settings,
                                              const char *key,
                                              GdkRGBA    *rgba);
-void terminal_g_settings_set_rgba (GSettings  *settings,
-                                   const char *key,
-                                   const GdkRGBA *rgba);
 
 GdkRGBA *terminal_g_settings_get_rgba_palette (GSettings  *settings,
                                                const char *key,

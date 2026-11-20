@@ -23,7 +23,9 @@
 void
 terminal_i18n_init (gboolean set_default)
 {
-  bindtextdomain (GETTEXT_PACKAGE, TERM_LOCALEDIR);
+  const char *localedir = g_getenv ("GNOME_TERMINAL_PORTABLE_LOCALEDIR");
+
+  bindtextdomain (GETTEXT_PACKAGE, localedir != NULL ? localedir : TERM_LOCALEDIR);
   bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 
   if (set_default)

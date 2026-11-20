@@ -145,7 +145,7 @@
       <section>
         <section id="set-profile-section" />
         <item>
-          <attribute name="label" translatable="yes">Set _Title…</attribute>
+          <attribute name="label" translatable="yes">Rename _Tab…</attribute>
           <attribute name="action">win.set-title</attribute>
           <attribute name="hidden-when">action-missing</attribute>
         </item>

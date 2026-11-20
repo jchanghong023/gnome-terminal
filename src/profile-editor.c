@@ -143,60 +143,7 @@ profile_prefs_settings_unbind_all (void)
 }
 
 
-typedef struct _TerminalColorScheme TerminalColorScheme;
-
-struct _TerminalColorScheme
-{
-  const char *name;
-  const GdkRGBA foreground;
-  const GdkRGBA background;
-};
-
 #define COLOR(r, g, b) { .red = (r) / 255.0, .green = (g) / 255.0, .blue = (b) / 255.0, .alpha = 1.0 }
-
-static const TerminalColorScheme color_schemes[] = {
-  { N_("Black on light yellow"),
-    COLOR (0x00, 0x00, 0x00),
-    COLOR (0xff, 0xff, 0xdd)
-  },
-  { N_("Black on white"),
-    COLOR (0x00, 0x00, 0x00),
-    COLOR (0xff, 0xff, 0xff)
-  },
-  { N_("Gray on black"),
-    COLOR (0xaa, 0xaa, 0xaa),
-    COLOR (0x00, 0x00, 0x00)
-  },
-  { N_("Green on black"),
-    COLOR (0x00, 0xff, 0x00),
-    COLOR (0x00, 0x00, 0x00)
-  },
-  { N_("White on black"),
-    COLOR (0xff, 0xff, 0xff),
-    COLOR (0x00, 0x00, 0x00)
-  },
-  /* Translators: "Tango" is the name of a colour scheme, "light" can be translated */
-  { N_("Tango light"),
-    COLOR (0x2e, 0x34, 0x36),
-    COLOR (0xee, 0xee, 0xec)
-  },
-  /* Translators: "Tango" is the name of a colour scheme, "dark" can be translated */
-  { N_("Tango dark"),
-    COLOR (0xd3, 0xd7, 0xcf),
-    COLOR (0x2e, 0x34, 0x36)
-  },
-  /* Translators: "Solarized" is the name of a colour scheme, "light" can be translated */
-  { N_("Solarized light"),
-    COLOR (0x65, 0x7B, 0x83),
-    COLOR (0xfd, 0xf6, 0xe3)
-  },
-  /* Translators: "Solarized" is the name of a colour scheme, "dark" can be translated */
-  { N_("Solarized dark"),
-    COLOR (0x83, 0x94, 0x96),
-    COLOR (0x00, 0x2b, 0x36)
-  },
-};
-
 #define TERMINAL_PALETTE_SIZE (16)
 
 enum
@@ -314,10 +261,6 @@ static const GdkRGBA terminal_palettes[TERMINAL_PALETTE_N_BUILTINS][TERMINAL_PAL
 
 #undef COLOR
 
-static void profile_colors_notify_scheme_combo_cb (GSettings *profile,
-                                                   const char *key,
-                                                   GtkComboBox *combo);
-
 static void profile_palette_notify_scheme_combo_cb (GSettings *profile,
                                                     const char *key,
                                                     GtkComboBox *combo);
@@ -397,52 +340,6 @@ modify_palette_entry (GSettings       *profile,
 }
 
 static void
-color_scheme_combo_changed_cb (GtkWidget *combo,
-                               GParamSpec *pspec,
-                               GSettings *profile)
-{
-  guint i;
-
-  i = gtk_combo_box_get_active (GTK_COMBO_BOX (combo));
-
-  if (i < G_N_ELEMENTS (color_schemes))
-    {
-      g_signal_handlers_block_by_func (profile, G_CALLBACK (profile_colors_notify_scheme_combo_cb), combo);
-      terminal_g_settings_set_rgba (profile, TERMINAL_PROFILE_FOREGROUND_COLOR_KEY, &color_schemes[i].foreground);
-      terminal_g_settings_set_rgba (profile, TERMINAL_PROFILE_BACKGROUND_COLOR_KEY, &color_schemes[i].background);
-      g_signal_handlers_unblock_by_func (profile, G_CALLBACK (profile_colors_notify_scheme_combo_cb), combo);
-    }
-  else
-    {
-      /* "custom" selected, no change */
-    }
-}
-
-static void
-profile_colors_notify_scheme_combo_cb (GSettings *profile,
-                                       const char *key,
-                                       GtkComboBox *combo)
-{
-  GdkRGBA fg, bg;
-  guint i;
-
-  terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_FOREGROUND_COLOR_KEY, &fg);
-  terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_BACKGROUND_COLOR_KEY, &bg);
-
-  for (i = 0; i < G_N_ELEMENTS (color_schemes); ++i)
-    {
-      if (rgba_equal (&fg, &color_schemes[i].foreground) &&
-          rgba_equal (&bg, &color_schemes[i].background))
-        break;
-    }
-  /* If we didn't find a match, then we get the last combo box item which is "custom" */
-
-  g_signal_handlers_block_by_func (combo, G_CALLBACK (color_scheme_combo_changed_cb), profile);
-  gtk_combo_box_set_active (GTK_COMBO_BOX (combo), i);
-  g_signal_handlers_unblock_by_func (combo, G_CALLBACK (color_scheme_combo_changed_cb), profile);
-}
-
-static void
 palette_scheme_combo_changed_cb (GtkComboBox *combo,
                                  GParamSpec *pspec,
                                  GSettings *profile)
@@ -451,7 +348,7 @@ palette_scheme_combo_changed_cb (GtkComboBox *combo,
 
   i = gtk_combo_box_get_active (GTK_COMBO_BOX (combo));
 
-  g_signal_handlers_block_by_func (profile, G_CALLBACK (profile_colors_notify_scheme_combo_cb), combo);
+  g_signal_handlers_block_by_func (profile, G_CALLBACK (profile_palette_notify_scheme_combo_cb), combo);
   if (i < TERMINAL_PALETTE_N_BUILTINS)
     terminal_g_settings_set_rgba_palette (profile, TERMINAL_PROFILE_PALETTE_KEY,
                                           terminal_palettes[i], TERMINAL_PALETTE_SIZE);
@@ -459,7 +356,7 @@ palette_scheme_combo_changed_cb (GtkComboBox *combo,
     {
       /* "custom" selected, no change */
     }
-  g_signal_handlers_unblock_by_func (profile, G_CALLBACK (profile_colors_notify_scheme_combo_cb), combo);
+  g_signal_handlers_unblock_by_func (profile, G_CALLBACK (profile_palette_notify_scheme_combo_cb), combo);
 }
 
 static void
@@ -587,30 +484,6 @@ set_input_hints(GtkWidget *entry)
 #if GTK_CHECK_VERSION (3, 22, 20)
   gtk_entry_set_input_hints (GTK_ENTRY (entry), GTK_INPUT_HINT_NO_EMOJI);
 #endif
-}
-
-static void
-init_color_scheme_menu (GtkWidget *widget)
-{
-  GtkCellRenderer *renderer;
-  GtkTreeIter iter;
-  gs_unref_object GtkListStore *store;
-  guint i;
-
-  store = gtk_list_store_new (1, G_TYPE_STRING);
-  for (i = 0; i < G_N_ELEMENTS (color_schemes); ++i)
-    gtk_list_store_insert_with_values (store, &iter, -1,
-                                       0, _(color_schemes[i].name),
-                                       -1);
-  gtk_list_store_insert_with_values (store, &iter, -1,
-                                      0, _("Custom"),
-                                      -1);
-
-  gtk_combo_box_set_model (GTK_COMBO_BOX (widget), GTK_TREE_MODEL (store));
-
-  renderer = gtk_cell_renderer_text_new ();
-  gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (widget), renderer, TRUE);
-  gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (widget), renderer, "text", 0, NULL);
 }
 
 enum {
@@ -889,9 +762,6 @@ profile_prefs_init (void)
   gtk_widget_add_events (w, GDK_BUTTON_PRESS_MASK | GDK_SCROLL_MASK);
   g_signal_connect (w, "scroll-event", G_CALLBACK (scroll_event_cb), NULL);
 
-  w = (GtkWidget *) gtk_builder_get_object (builder, "color-scheme-combobox");
-  init_color_scheme_menu (w);
-
   w = (GtkWidget *) gtk_builder_get_object (builder, "encoding-combobox");
   init_encodings_combo (w);
 
@@ -981,20 +851,6 @@ profile_prefs_load (const char *uuid, GSettings *profile)
                                 G_CALLBACK (profile_palette_notify_scheme_combo_cb),
                                 w);
 
-  /* Hook up the color scheme pickers and combo box */
-  w = (GtkWidget *) gtk_builder_get_object (builder, "color-scheme-combobox");
-  profile_prefs_signal_connect (w, "notify::active",
-                                G_CALLBACK (color_scheme_combo_changed_cb),
-                                profile);
-
-  profile_colors_notify_scheme_combo_cb (profile, NULL, GTK_COMBO_BOX (w));
-  profile_prefs_signal_connect (profile, "changed::" TERMINAL_PROFILE_FOREGROUND_COLOR_KEY,
-                                G_CALLBACK (profile_colors_notify_scheme_combo_cb),
-                                w);
-  profile_prefs_signal_connect (profile, "changed::" TERMINAL_PROFILE_BACKGROUND_COLOR_KEY,
-                                G_CALLBACK (profile_colors_notify_scheme_combo_cb),
-                                w);
-
   w = GTK_WIDGET (gtk_builder_get_object (builder, "custom-command-entry"));
   custom_command_entry_changed_cb (GTK_ENTRY (w));
   profile_prefs_signal_connect (w, "changed",
@@ -1004,19 +860,6 @@ profile_prefs_load (const char *uuid, GSettings *profile)
                                 "clicked",
                                 G_CALLBACK (reset_compat_defaults_cb),
                                 profile);
-
-  w = GTK_WIDGET (gtk_builder_get_object (builder, "background-colorpicker"));
-#if GTK_CHECK_VERSION (3, 19, 8)
-  g_object_set (w, "show-editor", TRUE, NULL);
-#endif
-  profile_prefs_settings_bind_with_mapping (profile,
-                                            TERMINAL_PROFILE_BACKGROUND_COLOR_KEY,
-                                            w,
-                                            "rgba",
-                                            G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET,
-                                            (GSettingsBindGetMapping) s_to_rgba,
-                                            (GSettingsBindSetMapping) rgba_to_s,
-                                            NULL, NULL);
 
   profile_prefs_settings_bind_with_mapping (profile,
                                             TERMINAL_PROFILE_BACKSPACE_BINDING_KEY,
@@ -1212,19 +1055,6 @@ profile_prefs_load (const char *uuid, GSettings *profile)
                                w,
                                "font-name", G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET);
 
-  w = GTK_WIDGET (gtk_builder_get_object (builder, "foreground-colorpicker"));
-#if GTK_CHECK_VERSION (3, 19, 8)
-      g_object_set (w, "show-editor", TRUE, NULL);
-#endif
-  profile_prefs_settings_bind_with_mapping (profile,
-                                            TERMINAL_PROFILE_FOREGROUND_COLOR_KEY,
-                                            w,
-                                            "rgba",
-                                            G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET,
-                                            (GSettingsBindGetMapping) s_to_rgba,
-                                            (GSettingsBindSetMapping) rgba_to_s,
-                                            NULL, NULL);
-
   profile_prefs_settings_bind (profile, TERMINAL_PROFILE_LOGIN_SHELL_KEY,
                                gtk_builder_get_object (builder,
                                                        "login-shell-checkbutton"),
@@ -1276,10 +1106,6 @@ profile_prefs_load (const char *uuid, GSettings *profile)
                                gtk_builder_get_object (builder,
                                                        "use-custom-command-checkbutton"),
                                "active", G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET);
-  profile_prefs_settings_bind (profile, TERMINAL_PROFILE_USE_THEME_COLORS_KEY,
-                               gtk_builder_get_object (builder,
-                                                       "use-theme-colors-checkbutton"),
-                               "active", G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET);
   profile_prefs_settings_bind (profile, TERMINAL_PROFILE_AUDIBLE_BELL_KEY,
                                gtk_builder_get_object (builder, "bell-checkbutton"),
                                "active",
@@ -1298,12 +1124,6 @@ profile_prefs_load (const char *uuid, GSettings *profile)
   profile_prefs_settings_bind (profile,
                                TERMINAL_PROFILE_USE_SYSTEM_FONT_KEY,
                                gtk_builder_get_object (builder, "font-selector"),
-                               "sensitive",
-                               G_SETTINGS_BIND_GET | G_SETTINGS_BIND_INVERT_BOOLEAN |
-                               G_SETTINGS_BIND_NO_SENSITIVITY);
-  profile_prefs_settings_bind (profile,
-                               TERMINAL_PROFILE_USE_THEME_COLORS_KEY,
-                               gtk_builder_get_object (builder, "colors-box"),
                                "sensitive",
                                G_SETTINGS_BIND_GET | G_SETTINGS_BIND_INVERT_BOOLEAN |
                                G_SETTINGS_BIND_NO_SENSITIVITY);

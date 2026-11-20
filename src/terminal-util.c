@@ -842,25 +842,6 @@ terminal_g_settings_get_rgba (GSettings  *settings,
                                 color);
 }
 
-/**
- * terminal_g_settings_set_rgba:
- * @settings: a #GSettings
- * @key: a valid key in @settings of type "s"
- * @color: a #GdkRGBA
- *
- * Sets a color in @key in @settings.
- */
-void
-terminal_g_settings_set_rgba (GSettings  *settings,
-                              const char *key,
-                              const GdkRGBA *color)
-{
-  gs_free char *str;
-
-  str = gdk_rgba_to_string (color);
-  g_settings_set_string (settings, key, str);
-}
-
 static gboolean
 as_to_rgba_palette (GVariant *variant,
                     gpointer *result,

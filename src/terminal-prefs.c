@@ -749,7 +749,6 @@ terminal_prefs_show_preferences (GSettings *profile, const char *widget_name)
   GtkWidget *dialog, *tree_view;
   GtkWidget *show_menubar_button, *disable_mnemonics_button, *disable_menu_accel_button;
   GtkWidget *disable_shortcuts_button;
-  GtkWidget *theme_variant_label, *theme_variant_combo;
   GtkWidget *new_terminal_mode_label, *new_terminal_mode_combo;
   GtkWidget *close_button, *help_button;
   GSettings *settings;
@@ -775,8 +774,6 @@ terminal_prefs_show_preferences (GSettings *profile, const char *widget_name)
                                        "close-button", &close_button,
                                        "help-button", &help_button,
                                        "default-show-menubar-checkbutton", &show_menubar_button,
-                                       "theme-variant-label", &theme_variant_label,
-                                       "theme-variant-combobox", &theme_variant_combo,
                                        "new-terminal-mode-label", &new_terminal_mode_label,
                                        "new-terminal-mode-combobox", &new_terminal_mode_combo,
                                        "disable-mnemonics-checkbutton", &disable_mnemonics_button,
@@ -837,17 +834,6 @@ terminal_prefs_show_preferences (GSettings *profile, const char *widget_name)
                      "active",
                      G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET);
   }
-
-#if GTK_CHECK_VERSION (3, 19, 0)
-  g_settings_bind (settings,
-                   TERMINAL_SETTING_THEME_VARIANT_KEY,
-                   theme_variant_combo,
-                   "active-id",
-                   G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET);
-#else
-  gtk_widget_set_visible (theme_variant_label, FALSE);
-  gtk_widget_set_visible (theme_variant_combo, FALSE);
-#endif /* GTK+ 3.19 */
 
 #ifndef DISUNIFY_NEW_TERMINAL_SECTION
   g_settings_bind (settings,

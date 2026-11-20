@@ -11,3 +11,21 @@ Remember that the terminal emulation is provided by the VTE widget, maintained
 as the 'vte' module on the GNOME SVN. The gnome-terminal product in bugzilla
 only covers the menubar, toolbar, and command line options, essentially. VTE,
 in turn, is responsible for the actual terminal display.
+
+CentOS 7 portable build
+=======================
+
+Build on CentOS 7 x86_64 with the GTK 3 and VTE development packages and
+the usual GNOME Terminal build tools. With the build toolchain enabled, run:
+
+    sh build-portable.sh /path/to/gnome-terminal-centos7-x86_64.run
+
+The .run file needs a CentOS 7 graphical desktop and its GTK, GLib and
+D-Bus runtime, but no installation or FUSE. Launch it with:
+
+    sh ./gnome-terminal-centos7-x86_64.run
+
+It extracts to a temporary directory and uses a private session bus and
+dconf database. It keeps working host UTF-8 locales and uses a bundled
+locale when needed: zhcn.utf-8 becomes zh_CN.UTF-8; other unavailable
+locales fall back to en_US.UTF-8. System locale settings are not changed.

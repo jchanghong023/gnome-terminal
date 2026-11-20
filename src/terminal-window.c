@@ -403,7 +403,8 @@ action_new_terminal_cb (GSimpleAction *action,
   new_working_directory = terminal_screen_get_current_dir (priv->active_screen);
   terminal_app_new_terminal (app, window, profile, NULL /* use profile encoding */,
                              NULL, NULL,
-                             new_working_directory,
+                             new_working_directory != NULL ? new_working_directory
+                                                           : terminal_screen_get_initial_directory (priv->active_screen),
                              terminal_screen_get_initial_environment (priv->active_screen),
                              1.0);
 

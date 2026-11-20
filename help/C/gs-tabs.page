@@ -34,13 +34,30 @@
   <p>By default, <app>Terminal</app> lists sessions in the left sidebar, one
   title per row. Click a title to switch to that terminal.</p>
 
-  <p>Click <gui>Add Working Directory…</gui> at the bottom of the sidebar
-  to add a project. The <gui>+</gui> button next to a project opens a new
-  terminal in its directory. Click a project title to collapse or expand
-  its terminal list without closing any terminals. Tabs are grouped by
-  the directory they started in; changing directory inside the terminal
-  does not move the tab. The project list and its order are saved between
-  launches, but open terminals are not restored by the sidebar.</p>
+  <p>Type a project name in <gui>Search projects</gui> at the top of the
+  sidebar. Only matching projects and their expanded tabs are shown.
+  Clearing the search restores the full list without switching terminals
+  or changing which projects are collapsed.</p>
+
+  <p>Use <gui>Add Working Directory…</gui> to choose a project directory,
+  or click <gui>Add Current Directory</gui> next to it to save the active
+  terminal's current local directory. Neither action opens a tab.
+  The <gui>+</gui> button next to a project opens a terminal in its
+  directory.</p>
+
+  <p>Use <gui>Project options</gui> next to a project to change its
+  directory or remove it from the list. Existing terminals stay open.
+  The project list and its order are saved between launches, but open
+  terminals are not restored by the sidebar.</p>
+
+  <p>Tabs are grouped under the most specific saved project that contains
+  their starting directory. Changing directory inside a terminal does
+  not move its tab. Click a project name to collapse or expand its tabs.</p>
+
+  <p>To cycle through tabs in the active tab's project, use
+  <keyseq><key>Alt</key><key>Page Up</key></keyseq> or
+  <keyseq><key>Alt</key><key>Page Down</key></keyseq>.
+  These shortcuts can be changed in <gui>Preferences</gui>.</p>
 
   <section id="add-tab">
     <title>Open a new tab</title>
@@ -55,34 +72,15 @@
 
   </section>
 
-<!-- TODO: doesn't work, see bug 720693
   <section id="rename-tab">
     <title>Rename a tab</title>
 
-    <p>Each tab has an automatically assigned title. You can rename the tabs
-    individually:</p>
-
-    <steps>
-      <item>
-        <p>Select <guiseq><gui style="menu">Terminal</gui>
-        <gui style="menuitem">Set Title…</gui></guiseq>.</p>
-      </item>
-      <item>
-        <p>Enter the desired <gui>Title</gui> that you wish to use for the tab.
-        This will overwrite any titles that would be set by terminal commands.
-        </p>
-        <note>
-          <p>It is not possible to set back the automatically set title once it
-          has been set for a tab. To see the title, you need to allow terminal
-          command titles to be shown in the <gui style="menuitem">Profile 
-          Preferences</gui>.</p>
-        </note>
-      </item>
-      <item>
-        <p>Click <gui style="button">OK</gui>.</p>
-      </item>
-    </steps>
-  </section>-->
+    <p>Click the <gui>Rename Tab</gui> button next to a tab in the sidebar,
+    or choose <guiseq><gui style="menu">Terminal</gui>
+    <gui style="menuitem">Rename Tab…</gui></guiseq> for the active tab.
+    Enter a name and click <gui>Rename</gui>. Leave the field blank to
+    restore the title supplied by the terminal.</p>
+  </section>
 
   <section id="close-tab">
     <title>Remove a tab</title>

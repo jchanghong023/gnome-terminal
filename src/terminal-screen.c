@@ -88,6 +88,7 @@ struct _TerminalScreenPrivate
   guint profile_changed_id;
   guint profile_forgotten_id;
   char *initial_working_directory;
+  char *custom_title;
   char **initial_env;
   char **override_command;
   gboolean shell;
@@ -117,9 +118,6 @@ enum {
 
 enum
 {
-  TARGET_COLOR,
-  TARGET_BGIMAGE,
-  TARGET_RESET_BG,
   TARGET_MOZ_URL,
   TARGET_NETSCAPE_URL,
   TARGET_TAB
@@ -297,20 +295,13 @@ terminal_screen_realize (GtkWidget *widget)
 }
 
 static void
-terminal_screen_update_style (TerminalScreen *screen)
-{
-  update_color_scheme (screen);
-  terminal_screen_set_font (screen);
-}
-
-static void
 terminal_screen_style_updated (GtkWidget *widget)
 {
   TerminalScreen *screen = TERMINAL_SCREEN (widget);
 
   GTK_WIDGET_CLASS (terminal_screen_parent_class)->style_updated (widget);
 
-  terminal_screen_update_style (screen);
+  terminal_screen_set_font (screen);
 }
 
 #ifdef ENABLE_DEBUG
@@ -338,8 +329,6 @@ terminal_screen_init (TerminalScreen *screen)
 {
   const GtkTargetEntry target_table[] = {
     { (char *) "GTK_NOTEBOOK_TAB", GTK_TARGET_SAME_APP, TARGET_TAB },
-    { (char *) "application/x-color", 0, TARGET_COLOR },
-    { (char *) "x-special/gnome-reset-background", 0, TARGET_RESET_BG },
     { (char *) "text/x-moz-url",  0, TARGET_MOZ_URL },
     { (char *) "_NETSCAPE_URL", 0, TARGET_NETSCAPE_URL }
   };
@@ -641,6 +630,7 @@ terminal_screen_finalize (GObject *object)
   terminal_screen_set_profile (screen, NULL);
 
   g_free (priv->initial_working_directory);
+  g_free (priv->custom_title);
   g_strfreev (priv->override_command);
   g_strfreev (priv->initial_env);
 
@@ -769,7 +759,25 @@ terminal_screen_exec (TerminalScreen *screen,
 const char*
 terminal_screen_get_title (TerminalScreen *screen)
 {
+  if (screen->priv->custom_title != NULL)
+    return screen->priv->custom_title;
   return vte_terminal_get_window_title (VTE_TERMINAL (screen));
+}
+
+void
+terminal_screen_set_custom_title (TerminalScreen *screen,
+                                  const char *title)
+{
+  TerminalScreenPrivate *priv = screen->priv;
+
+  if (title != NULL && *title == '\0')
+    title = NULL;
+  if (g_strcmp0 (priv->custom_title, title) == 0)
+    return;
+
+  g_free (priv->custom_title);
+  priv->custom_title = g_strdup (title);
+  g_object_notify (G_OBJECT (screen), "title");
 }
 
 const char*
@@ -831,9 +839,6 @@ terminal_screen_profile_changed_cb (GSettings     *profile,
     terminal_screen_set_font (screen);
 
   if (!prop_name ||
-      prop_name == I_(TERMINAL_PROFILE_USE_THEME_COLORS_KEY) ||
-      prop_name == I_(TERMINAL_PROFILE_FOREGROUND_COLOR_KEY) ||
-      prop_name == I_(TERMINAL_PROFILE_BACKGROUND_COLOR_KEY) ||
       prop_name == I_(TERMINAL_PROFILE_BOLD_COLOR_SAME_AS_FG_KEY) ||
       prop_name == I_(TERMINAL_PROFILE_BOLD_COLOR_KEY) ||
       prop_name == I_(TERMINAL_PROFILE_CURSOR_COLORS_SET_KEY) ||
@@ -907,42 +912,26 @@ terminal_screen_profile_changed_cb (GSettings     *profile,
 static void
 update_color_scheme (TerminalScreen *screen)
 {
-  GtkWidget *widget = GTK_WIDGET (screen);
   TerminalScreenPrivate *priv = screen->priv;
   GSettings *profile = priv->profile;
   gs_free GdkRGBA *colors;
   gsize n_colors;
-  GdkRGBA fg, bg, bold, theme_fg, theme_bg;
+  static const GdkRGBA fg = { 0xee / 255.0, 0xee / 255.0, 0xec / 255.0, 1.0 };
+  static const GdkRGBA bg = { 0x1e / 255.0, 0x1e / 255.0, 0x1e / 255.0, 1.0 };
+  GdkRGBA bold;
   GdkRGBA cursor_bg, cursor_fg;
   GdkRGBA highlight_bg, highlight_fg;
   GdkRGBA *boldp;
   GdkRGBA *cursor_bgp = NULL, *cursor_fgp = NULL;
   GdkRGBA *highlight_bgp = NULL, *highlight_fgp = NULL;
-  GtkStyleContext *context;
-  gboolean use_theme_colors;
-
-  context = gtk_widget_get_style_context (widget);
-  gtk_style_context_get_color (context, gtk_style_context_get_state (context), &theme_fg);
-  gtk_style_context_get_background_color (context, gtk_style_context_get_state (context), &theme_bg);
-
-  use_theme_colors = g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_THEME_COLORS_KEY);
-  if (use_theme_colors ||
-      (!terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_FOREGROUND_COLOR_KEY, &fg) ||
-       !terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_BACKGROUND_COLOR_KEY, &bg)))
-    {
-      fg = theme_fg;
-      bg = theme_bg;
-    }
 
   if (!g_settings_get_boolean (profile, TERMINAL_PROFILE_BOLD_COLOR_SAME_AS_FG_KEY) &&
-      !use_theme_colors &&
       terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_BOLD_COLOR_KEY, &bold))
     boldp = &bold;
   else
     boldp = NULL;
 
-  if (g_settings_get_boolean (profile, TERMINAL_PROFILE_CURSOR_COLORS_SET_KEY) &&
-      !use_theme_colors)
+  if (g_settings_get_boolean (profile, TERMINAL_PROFILE_CURSOR_COLORS_SET_KEY))
     {
       if (terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_CURSOR_BACKGROUND_COLOR_KEY, &cursor_bg))
         cursor_bgp = &cursor_bg;
@@ -950,8 +939,7 @@ update_color_scheme (TerminalScreen *screen)
         cursor_fgp = &cursor_fg;
     }
 
-  if (g_settings_get_boolean (profile, TERMINAL_PROFILE_HIGHLIGHT_COLORS_SET_KEY) &&
-      !use_theme_colors)
+  if (g_settings_get_boolean (profile, TERMINAL_PROFILE_HIGHLIGHT_COLORS_SET_KEY))
     {
       if (terminal_g_settings_get_rgba (profile, TERMINAL_PROFILE_HIGHLIGHT_BACKGROUND_COLOR_KEY, &highlight_bg))
         highlight_bgp = &highlight_bg;
@@ -959,7 +947,7 @@ update_color_scheme (TerminalScreen *screen)
         highlight_fgp = &highlight_fg;
     }
 
-  colors = terminal_g_settings_get_rgba_palette (priv->profile, TERMINAL_PROFILE_PALETTE_KEY, &n_colors);
+  colors = terminal_g_settings_get_rgba_palette (profile, TERMINAL_PROFILE_PALETTE_KEY, &n_colors);
   vte_terminal_set_colors (VTE_TERMINAL (screen), &fg, &bg,
                            colors, n_colors);
   vte_terminal_set_color_bold (VTE_TERMINAL (screen), boldp);
@@ -1663,9 +1651,8 @@ terminal_screen_get_initial_directory (TerminalScreen *screen)
  * terminal_screen_get_current_dir:
  * @screen:
  *
- * Tries to determine the current working directory of the foreground process
- * in @screen's PTY, falling back to the current working directory of the
- * primary child.
+ * Uses the terminal's reported local working directory when available.
+ * On Linux, falls back to the foreground process and then the primary child.
  * 
  * Returns: a newly allocated string containing the current working directory,
  *   or %NULL on failure
@@ -1676,11 +1663,34 @@ terminal_screen_get_current_dir (TerminalScreen *screen)
   const char *uri;
 
   uri = vte_terminal_get_current_directory_uri (VTE_TERMINAL (screen));
-  if (uri != NULL)
-    return g_filename_from_uri (uri, NULL, NULL);
+  if (uri != NULL) {
+    gs_free char *hostname = NULL;
+    gs_free char *path = g_filename_from_uri (uri, &hostname, NULL);
 
-  if (screen->priv->initial_working_directory)
-    return g_strdup (screen->priv->initial_working_directory);
+    if (hostname == NULL || g_ascii_strcasecmp (hostname, "localhost") == 0 ||
+        g_ascii_strcasecmp (hostname, g_get_host_name ()) == 0)
+      return g_steal_pointer (&path);
+    return NULL;
+  }
+
+#ifdef __linux__
+  VtePty *pty = vte_terminal_get_pty (VTE_TERMINAL (screen));
+  int child = screen->priv->child_pid;
+  int foreground = pty != NULL ? tcgetpgrp (vte_pty_get_fd (pty)) : -1;
+  char filename[64];
+
+  if (foreground > 0 && foreground != child) {
+    g_snprintf (filename, sizeof filename, "/proc/%d/cwd", foreground);
+    char *path = g_file_read_link (filename, NULL);
+    if (path != NULL)
+      return path;
+  }
+
+  if (child > 0) {
+    g_snprintf (filename, sizeof filename, "/proc/%d/cwd", child);
+    return g_file_read_link (filename, NULL);
+  }
+#endif
 
   return NULL;
 }
@@ -1689,7 +1699,8 @@ static void
 terminal_screen_window_title_changed (VteTerminal *vte_terminal,
                                       TerminalScreen *screen)
 {
-  g_object_notify (G_OBJECT (screen), "title");
+  if (screen->priv->custom_title == NULL)
+    g_object_notify (G_OBJECT (screen), "title");
 }
 
 static void
@@ -1769,7 +1780,6 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
                                     guint             timestamp)
 {
   TerminalScreen *screen = TERMINAL_SCREEN (widget);
-  TerminalScreenPrivate *priv = screen->priv;
   const guchar *selection_data_data;
   GdkAtom selection_data_target;
   gint selection_data_length, selection_data_format;
@@ -1823,31 +1833,6 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
     }
   else switch (info)
     {
-    case TARGET_COLOR:
-      {
-        guint16 *data = (guint16 *)selection_data_data;
-        GdkRGBA color;
-
-        /* We accept drops with the wrong format, since the KDE color
-         * chooser incorrectly drops application/x-color with format 8.
-         * So just check for the data length.
-         */
-        if (selection_data_length != 8)
-          return;
-
-        color.red = (double) data[0] / 65535.;
-        color.green = (double) data[1] / 65535.;
-        color.blue = (double) data[2] / 65535.;
-        color.alpha = 1.;
-        /* FIXME: use opacity from data[3] */
-
-        terminal_g_settings_set_rgba (priv->profile,
-                                      TERMINAL_PROFILE_BACKGROUND_COLOR_KEY,
-                                      &color);
-        g_settings_set_boolean (priv->profile, TERMINAL_PROFILE_USE_THEME_COLORS_KEY, FALSE);
-      }
-      break;
-
     case TARGET_MOZ_URL:
       {
         char *utf8_data, *newline, *text;
@@ -1911,10 +1896,6 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
         g_free (text);
         g_free (uris[0]);
       }
-      break;
-
-    case TARGET_RESET_BG:
-      g_settings_reset (priv->profile, TERMINAL_PROFILE_BACKGROUND_COLOR_KEY);
       break;
 
     case TARGET_TAB:

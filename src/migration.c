@@ -62,7 +62,6 @@ enum {
 #define GCONF_PROFILES_PREFIX  GCONF_PREFIX "/profiles"
 
 #define KEY_ALLOW_BOLD "allow_bold"
-#define KEY_BACKGROUND_COLOR "background_color"
 #define KEY_BACKGROUND_DARKNESS "background_darkness"
 #define KEY_BACKGROUND_IMAGE_FILE "background_image"
 #define KEY_BACKGROUND_TYPE "background_type"
@@ -79,7 +78,6 @@ enum {
 #define KEY_ENCODING "encoding"
 #define KEY_EXIT_ACTION "exit_action"
 #define KEY_FONT "font"
-#define KEY_FOREGROUND_COLOR "foreground_color"
 #define KEY_LOGIN_SHELL "login_shell"
 #define KEY_PALETTE "palette"
 #define KEY_SCROLL_BACKGROUND "scroll_background"
@@ -91,7 +89,6 @@ enum {
 #define KEY_SILENT_BELL "silent_bell"
 #define KEY_USE_CUSTOM_COMMAND "use_custom_command"
 #define KEY_USE_SYSTEM_FONT "use_system_font"
-#define KEY_USE_THEME_COLORS "use_theme_colors"
 #define KEY_VISIBLE_NAME "visible_name"
 
 static const GConfEnumStringPair erase_binding_pairs[] = {
@@ -402,10 +399,6 @@ migrate_profile (TerminalSettingsList *list,
     g_settings_set_string (settings, TERMINAL_PROFILE_VISIBLE_NAME_KEY,
                            is_default ? _("Default") : _("Unnamed"));
 
-  migrate_string (client, path, KEY_FOREGROUND_COLOR,
-                  settings, TERMINAL_PROFILE_FOREGROUND_COLOR_KEY);
-  migrate_string (client, path, KEY_BACKGROUND_COLOR,
-                  settings, TERMINAL_PROFILE_BACKGROUND_COLOR_KEY);
   migrate_string (client, path, KEY_BOLD_COLOR,
                  settings, TERMINAL_PROFILE_BOLD_COLOR_KEY);
   migrate_bool (client, path, KEY_BOLD_COLOR_SAME_AS_FG,
@@ -461,9 +454,6 @@ migrate_profile (TerminalSettingsList *list,
                 settings, TERMINAL_PROFILE_BACKSPACE_BINDING_KEY);
   migrate_enum (client, path, KEY_DELETE_BINDING, erase_binding_pairs,
                 settings, TERMINAL_PROFILE_DELETE_BINDING_KEY);
-  migrate_bool (client, path, KEY_USE_THEME_COLORS,
-                settings, TERMINAL_PROFILE_USE_THEME_COLORS_KEY,
-                FALSE);
   migrate_bool (client, path, KEY_USE_SYSTEM_FONT,
                 settings, TERMINAL_PROFILE_USE_SYSTEM_FONT_KEY,
                 FALSE);

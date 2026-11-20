@@ -66,9 +66,11 @@
 #define KEY_NEW_TAB             "new-tab"
 #define KEY_NEW_WINDOW          "new-window"
 #define KEY_NEXT_TAB            "next-tab"
+#define KEY_NEXT_PROJECT_TAB    "next-project-tab"
 #define KEY_PASTE               "paste"
 #define KEY_PREFERENCES         "preferences"
 #define KEY_PREV_TAB            "prev-tab"
+#define KEY_PREV_PROJECT_TAB    "prev-project-tab"
 #define KEY_PRINT               "print"
 #define KEY_READ_ONLY           "read-only"
 #define KEY_RESET_AND_CLEAR     "reset-and-clear"
@@ -168,6 +170,8 @@ static KeyEntry terminal_entries[] = {
 static KeyEntry tabs_entries[] = {
   ENTRY_MDI (N_("Switch to Previous Tab"), KEY_PREV_TAB,       "tab-switch-left",  NULL, NULL),
   ENTRY_MDI (N_("Switch to Next Tab"),     KEY_NEXT_TAB,       "tab-switch-right", NULL, NULL),
+  ENTRY_MDI (N_("Switch to Previous Tab in Project"), KEY_PREV_PROJECT_TAB, "project-tab-switch", "b", "false"),
+  ENTRY_MDI (N_("Switch to Next Tab in Project"),     KEY_NEXT_PROJECT_TAB, "project-tab-switch", "b", "true"),
   ENTRY_MDI (N_("Move Tab to the Left"),   KEY_MOVE_TAB_LEFT,  "tab-move-left",    NULL, NULL),
   ENTRY_MDI (N_("Move Tab to the Right"),  KEY_MOVE_TAB_RIGHT, "tab-move-right",   NULL, NULL),
   ENTRY_MDI (N_("Detach Tab"),             KEY_DETACH_TAB,     "tab-detach",       NULL, NULL),
