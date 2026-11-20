@@ -85,6 +85,14 @@ TerminalScreen *terminal_screen_new (GSettings       *profile,
 
 void terminal_screen_set_project_launch (TerminalScreen *screen,
                                          gboolean        confirm_direct_child);
+void terminal_screen_set_force_shell (TerminalScreen *screen);
+
+const char *terminal_screen_get_startup_ssh (TerminalScreen *screen,
+                                             const char **credential);
+void terminal_screen_set_startup_ssh (TerminalScreen *screen,
+                                      const char *command,
+                                      const char *credential);
+void terminal_screen_keep_startup_ssh (TerminalScreen *screen);
 
 gboolean terminal_screen_exec (TerminalScreen *screen,
                                char          **argv,

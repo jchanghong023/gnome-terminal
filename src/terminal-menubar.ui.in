@@ -156,6 +156,10 @@
           <attribute name="action">win.set-title</attribute>
           <attribute name="hidden-when">action-missing</attribute>
         </item>
+        <item>
+          <attribute name="label" translatable="yes">SSH on _Reopen…</attribute>
+          <attribute name="action">win.startup-ssh</attribute>
+        </item>
         <submenu id="set-encoding-submenu">
           <attribute name="label" translatable="yes">Set _Character Encoding</attribute>
         </submenu>

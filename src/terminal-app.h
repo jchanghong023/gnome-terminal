@@ -70,6 +70,12 @@ void terminal_app_remove_profile (TerminalApp *app,
 TerminalWindow * terminal_app_new_window   (TerminalApp *app,
                                             int monitor);
 
+void terminal_app_save_session (TerminalApp *app,
+                                TerminalWindow *window);
+gboolean terminal_app_restore_session (TerminalApp *app,
+                                       const char *startup_id,
+                                       char **child_env);
+
 typedef enum {
   TERMINAL_NEW_TERMINAL_DEFAULT = 0,
   TERMINAL_NEW_TERMINAL_SPLIT = 1 << 0,

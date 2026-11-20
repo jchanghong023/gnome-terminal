@@ -27,5 +27,7 @@ src/terminal-screen.c
 src/terminal-search-popover.c
 src/terminal-tab-label.c
 src/terminal-project-sidebar.c
+src/terminal-ssh.c
+src/terminal-ssh-helper.c
 src/terminal-util.c
 src/terminal-window.c

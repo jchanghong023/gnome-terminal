@@ -503,10 +503,26 @@ terminal_factory_impl_create_instance (TerminalFactory *factory,
   return TRUE; /* handled */
 }
 
+static gboolean
+terminal_factory_impl_restore_session (TerminalFactory *factory,
+                                       GDBusMethodInvocation *invocation,
+                                       GVariant *options)
+{
+  const char *startup_id = NULL;
+  gs_free char **envv = NULL;
+  g_variant_lookup (options, "desktop-startup-id", "^&ay", &startup_id);
+  g_variant_lookup (options, "environ", "^a&ay", &envv);
+
+  gboolean restored = terminal_app_restore_session (terminal_app_get (), startup_id, envv);
+  terminal_factory_complete_restore_session (factory, invocation, restored);
+  return TRUE;
+}
+
 static void
 terminal_factory_impl_iface_init (TerminalFactoryIface *iface)
 {
   iface->handle_create_instance = terminal_factory_impl_create_instance;
+  iface->handle_restore_session = terminal_factory_impl_restore_session;
 }
 
 G_DEFINE_TYPE_WITH_CODE (TerminalFactoryImpl, terminal_factory_impl, TERMINAL_TYPE_FACTORY_SKELETON,

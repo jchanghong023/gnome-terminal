@@ -83,6 +83,8 @@ G_BEGIN_DECLS
 #define TERMINAL_SETTING_SHELL_INTEGRATION_KEY          "shell-integration-enabled"
 #define TERMINAL_SETTING_TAB_POLICY_KEY                 "tab-policy"
 #define TERMINAL_SETTING_TAB_POSITION_KEY               "tab-position"
+#define TERMINAL_SETTING_SESSION_KEY                    "terminal-session"
+#define TERMINAL_SETTING_SESSION_SSH_KEY                "terminal-session-ssh"
 
 #define TERMINAL_SETTINGS_LIST_LIST_KEY                 "list"
 #define TERMINAL_SETTINGS_LIST_DEFAULT_KEY              "default"

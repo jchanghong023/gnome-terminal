@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+#ifndef TERMINAL_SSH_H
+#define TERMINAL_SSH_H
+
+#include "terminal-screen.h"
+
+char **terminal_ssh_build_argv (const char *command,
+                                const char *credential,
+                                GError **error);
+void terminal_ssh_configure (GtkWindow *parent,
+                             TerminalScreen *screen);
+void terminal_ssh_forget_password (const char *credential);
+
+#endif

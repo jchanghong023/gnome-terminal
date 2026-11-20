@@ -94,6 +94,9 @@ PKG_CHECK_MODULES([TERM],
    libpcre2-8 >= $PCRE2_REQUIRED
    $PLATFORM_DEPS])
 
+PKG_CHECK_MODULES([SSH_HELPER],
+  [gtk+-$GTK_API_VERSION >= $GTK_REQUIRED libsecret-1 >= 0.18 uuid])
+
 # ****
 # DBus
 # ****

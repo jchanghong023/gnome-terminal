@@ -45,6 +45,7 @@
 #include "terminal-util.h"
 #include "terminal-window.h"
 #include "terminal-libgsystem.h"
+#include "terminal-ssh.h"
 
 struct _TerminalWindowPrivate
 {
@@ -602,6 +603,22 @@ action_export_cb (GSimpleAction *action,
 #endif /* ENABLE_EXPORT */
 
 static void
+close_terminal_window (TerminalWindow *window)
+{
+  terminal_app_save_session (terminal_app_get (), window);
+  gtk_widget_destroy (GTK_WIDGET (window));
+}
+
+static void
+action_startup_ssh_cb (GSimpleAction *action,
+                       GVariant *parameter,
+                       gpointer user_data)
+{
+  TerminalWindow *window = user_data;
+  terminal_ssh_configure (GTK_WINDOW (window), window->priv->active_screen);
+}
+
+static void
 action_close_cb (GSimpleAction *action,
                  GVariant *parameter,
                  gpointer user_data)
@@ -621,13 +638,10 @@ action_close_cb (GSimpleAction *action,
   else
     return;
 
-  if (confirm_close_window_or_tab (window, screen))
-    return;
-
-  if (screen)
+  if (screen == NULL)
+    terminal_window_request_close (window);
+  else if (!confirm_close_window_or_tab (window, screen))
     terminal_window_remove_screen (window, screen);
-  else
-    gtk_widget_destroy (GTK_WIDGET (window));
 }
 
 static void
@@ -1778,6 +1792,7 @@ screen_show_popup_menu_cb (TerminalScreen *screen,
   /* Profile and property section */
   gs_unref_object GMenu *section5 = g_menu_new ();
   g_menu_append (section5, _("Read-_Only"), "win.read-only");
+  g_menu_append (section5, _("SSH on _Reopen…"), "win.startup-ssh");
 
   GMenuModel *profiles_menu = terminal_app_get_profile_section (app);
   if (profiles_menu != NULL && g_menu_model_get_n_items (profiles_menu) > 1) {
@@ -2225,6 +2240,7 @@ terminal_window_init (TerminalWindow *window)
     { "reset",               action_reset_cb,            "b",    NULL, NULL },
     { "select-all",          action_select_all_cb,       NULL,   NULL, NULL },
     { "size-to",             action_size_to_cb,          "(uu)", NULL, NULL },
+    { "startup-ssh",         action_startup_ssh_cb,     NULL,   NULL, NULL },
     { "tab-detach",          action_tab_detach_cb,       NULL,   NULL, NULL },
     { "tab-move-left",       action_tab_move_left_cb,    NULL,   NULL, NULL },
     { "tab-move-right",      action_tab_move_right_cb,   NULL,   NULL, NULL },
@@ -2519,7 +2535,8 @@ terminal_window_delete_event (GtkWidget *widget,
                               GdkEvent *event,
                               gpointer data)
 {
-   return confirm_close_window_or_tab (TERMINAL_WINDOW (widget), NULL);
+  terminal_window_request_close (TERMINAL_WINDOW (widget));
+  return TRUE;
 }
 
 static void
@@ -3391,7 +3408,7 @@ confirm_close_response_cb (GtkWidget *dialog,
   if (screen)
     terminal_window_remove_screen (window, screen);
   else
-    gtk_widget_destroy (GTK_WIDGET (window));
+    close_terminal_window (window);
 }
 
 /* Returns: TRUE if closing needs to wait until user confirmation;
@@ -3506,7 +3523,7 @@ terminal_window_request_close (TerminalWindow *window)
   if (confirm_close_window_or_tab (window, NULL))
     return;
 
-  gtk_widget_destroy (GTK_WIDGET (window));
+  close_terminal_window (window);
 }
 
 const char *

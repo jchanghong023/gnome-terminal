@@ -532,12 +532,7 @@ main (int argc, char **argv)
 
   _terminal_debug_init ();
 
-  /* Make a NULL-terminated copy since we may need it later */
-  gs_free char **argv_copy = g_new (char *, argc + 1);
-  int i;
-  for (i = 0; i < argc; ++i)
-    argv_copy [i] = argv [i];
-  argv_copy [i] = NULL;
+  gboolean plain_launch = argc == 1;
 
   gs_free_error GError *error = NULL;
   gs_free_options TerminalOptions *options = terminal_options_parse (&argc, &argv, &error);
@@ -557,6 +552,24 @@ main (int argc, char **argv)
                           &parent_screen_object_path,
                           &error))
     return exit_code;
+
+  if (plain_launch && parent_screen_object_path == NULL) {
+    GVariantBuilder builder;
+    gboolean restored;
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
+    terminal_client_append_exec_options (&builder, NULL, NULL, 0, FALSE);
+    if (options->startup_id != NULL)
+      g_variant_builder_add (&builder, "{sv}", "desktop-startup-id", g_variant_new_bytestring (options->startup_id));
+
+    if (terminal_factory_call_restore_session_sync (factory, g_variant_builder_end (&builder),
+                                                    &restored, NULL, &error)) {
+      if (restored)
+        return EXIT_SUCCESS;
+    } else if (!g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD)) {
+      terminal_printerr ("Failed to restore terminal session: %s\n", error->message);
+      return exit_code;
+    }
+  }
 
   if (options->print_environment) {
     const char *name_owner = g_dbus_proxy_get_name_owner (G_DBUS_PROXY (factory));

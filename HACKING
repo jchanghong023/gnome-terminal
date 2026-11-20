@@ -12,11 +12,35 @@ as the 'vte' module on the GNOME SVN. The gnome-terminal product in bugzilla
 only covers the menubar, toolbar, and command line options, essentially. VTE,
 in turn, is responsible for the actual terminal display.
 
+Terminal session restore
+========================
+
+Closing the last terminal window saves the open tabs in order, the selected
+tab, and each pane's current working directory. Launch Terminal with no
+arguments to reopen them as fresh shells. Missing directories fall back to
+the home directory. Closing individual tabs removes them from the session.
+Terminal output and running commands are not saved.
+
+To reconnect to SSH when reopening a tab, choose Terminal → SSH on Reopen
+(also available from the terminal's context menu). Enter an OpenSSH command,
+such as `ssh -p 2222 user@host`, and optionally a password. The setting applies
+to the selected pane. Close the last window normally to save the session.
+Clear the command to disable reconnection, or choose Forget Password to keep
+the command and sign in manually.
+
+The session stores the command and a keyring reference, never the password.
+Do not put secrets in the command itself. Password autofill requires the
+desktop's Secret Service and applies only to standard SSH password
+authentication, not interactive challenges or jump hosts. An unknown host
+key requires confirmation; a changed host key blocks the connection.
+Reopening starts a new SSH session, not the previous remote shell or directory.
+
 CentOS 7 portable build
 =======================
 
-Build on CentOS 7 x86_64 with the GTK 3 and VTE development packages and
-the usual GNOME Terminal build tools. With the build toolchain enabled, run:
+Build on CentOS 7 x86_64 with the GTK 3, VTE, and libsecret development
+packages and the usual GNOME Terminal build tools. With the build toolchain
+enabled, run:
 
     sh build-portable.sh /path/to/gnome-terminal-centos7-x86_64.run
 

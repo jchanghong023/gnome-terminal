@@ -24,6 +24,10 @@
       <arg type="a{sv}" name="options" direction="in" />
       <arg type="o" name="receiver" direction="out" />
     </method>
+    <method name="RestoreSession">
+      <arg type="a{sv}" name="options" direction="in" />
+      <arg type="b" name="restored" direction="out" />
+    </method>
   </interface>
 
   <interface name="org.gnome.Terminal.Terminal0">

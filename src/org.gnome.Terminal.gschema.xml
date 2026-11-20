@@ -743,6 +743,16 @@
       <summary>URIs of projects collapsed in the sidebar</summary>
     </key>
 
+    <key name="terminal-session" type="(ua(ayay))">
+      <default>(0, [])</default>
+      <summary>Selected tab and working directories of the last closed terminal window</summary>
+    </key>
+
+    <key name="terminal-session-ssh" type="a((ss)(ss))">
+      <default>[]</default>
+      <summary>OpenSSH commands and system keyring references for saved terminal panes</summary>
+    </key>
+
    <!-- <child name="profiles" schema="org.gnome.Terminal.ProfilesList" /> -->
 
    <child name="keybindings" schema="org.gnome.Terminal.Legacy.Keybindings" />

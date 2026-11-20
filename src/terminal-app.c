@@ -34,6 +34,7 @@
 #include "terminal-accels.h"
 #include "terminal-screen.h"
 #include "terminal-screen-container.h"
+#include "terminal-mdi-container.h"
 #include "terminal-notebook.h"
 #include "terminal-window.h"
 #include "terminal-profiles-list.h"
@@ -63,15 +64,6 @@
 #define GTK_DEBUG_SETTING_SCHEMA                "org.gtk.Settings.Debug"
 #define GTK_DEBUG_ENABLE_INSPECTOR_KEY          "enable-inspector-keybinding"
 #define GTK_DEBUG_ENABLE_INSPECTOR_TYPE         G_VARIANT_TYPE_BOOLEAN
-
-/*
- * Session state is stored entirely in the RestartCommand command line.
- *
- * The number one rule: all stored information is EITHER per-session,
- * per-profile, or set from a command line option. THERE CAN BE NO
- * OVERLAP. The UI and implementation totally break if you overlap
- * these categories. See gnome-terminal 1.x for why.
- */
 
 struct _TerminalAppClass {
   GtkApplicationClass parent_class;
@@ -915,6 +907,171 @@ terminal_app_new_window (TerminalApp *app,
   window = terminal_window_new (G_APPLICATION (app));
 
   return window;
+}
+
+static gboolean
+has_other_terminal_window (TerminalApp *app,
+                           TerminalWindow *window)
+{
+  for (GList *l = gtk_application_get_windows (GTK_APPLICATION (app)); l != NULL; l = l->next) {
+    if (l->data != window && TERMINAL_IS_WINDOW (l->data))
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static char *
+dup_session_directory (TerminalScreen *screen)
+{
+  char *directory = terminal_screen_get_current_dir (screen);
+  if (directory != NULL)
+    return directory;
+
+  const char *initial = terminal_screen_get_initial_directory (screen);
+  return g_strdup (initial != NULL ? initial : g_get_home_dir ());
+}
+
+static void
+append_session_ssh (GVariantBuilder *builder,
+                    TerminalScreen *screen,
+                    TerminalScreen *peer)
+{
+  const char *credential = NULL, *peer_credential = NULL;
+  const char *command = terminal_screen_get_startup_ssh (screen, &credential);
+  const char *peer_command = peer != NULL ? terminal_screen_get_startup_ssh (peer, &peer_credential) : NULL;
+  g_variant_builder_add (builder, "((ss)(ss))",
+                        command != NULL ? command : "", credential != NULL ? credential : "",
+                        peer_command != NULL ? peer_command : "", peer_credential != NULL ? peer_credential : "");
+}
+
+void
+terminal_app_save_session (TerminalApp *app,
+                           TerminalWindow *window)
+{
+  /* An explicitly closed window is only a session exit if it is the last one. */
+  if (has_other_terminal_window (app, window))
+    return;
+
+  TerminalMdiContainer *container = TERMINAL_MDI_CONTAINER (terminal_window_get_mdi_container (window));
+  gs_free_list GList *tabs = terminal_mdi_container_list_tab_screens (container);
+  if (tabs == NULL)
+    return;
+
+  /* Store byte strings for paths; an empty second path denotes a single pane. */
+  GVariantBuilder builder, ssh_builder;
+  g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(ayay)"));
+  g_variant_builder_init (&ssh_builder, G_VARIANT_TYPE ("a((ss)(ss))"));
+  for (GList *l = tabs; l != NULL; l = l->next) {
+    TerminalScreen *screen = l->data;
+    TerminalScreen *peer = terminal_notebook_get_peer (screen);
+    gs_free char *directory = dup_session_directory (screen);
+    gs_free char *peer_directory = peer != NULL ? dup_session_directory (peer) : NULL;
+    g_variant_builder_add (&builder, "(^ay^ay)", directory,
+                          peer_directory != NULL ? peer_directory : "");
+    append_session_ssh (&ssh_builder, screen, peer);
+  }
+
+  guint selected = MAX (0, terminal_mdi_container_get_active_screen_num (container));
+  gs_unref_object GSettings *settings = g_settings_new (TERMINAL_SETTING_SCHEMA);
+  g_settings_delay (settings);
+  gboolean saved_tabs = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_KEY,
+                                              g_variant_new ("(ua(ayay))", selected, &builder));
+  gboolean saved_ssh = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY,
+                                             g_variant_builder_end (&ssh_builder));
+  if (!saved_tabs || !saved_ssh) {
+    g_settings_revert (settings);
+    return;
+  }
+
+  g_settings_apply (settings);
+  g_settings_sync ();
+  for (GList *l = tabs; l != NULL; l = l->next) {
+    TerminalScreen *screen = l->data;
+    TerminalScreen *peer = terminal_notebook_get_peer (screen);
+    terminal_screen_keep_startup_ssh (screen);
+    if (peer != NULL)
+      terminal_screen_keep_startup_ssh (peer);
+  }
+}
+
+static TerminalScreen *
+new_session_screen (GSettings *profile,
+                    const char *directory,
+                    char **child_env,
+                    const char *ssh_command,
+                    const char *ssh_credential)
+{
+  if (!g_path_is_absolute (directory) || !g_file_test (directory, G_FILE_TEST_IS_DIR))
+    directory = g_get_home_dir ();
+
+  TerminalScreen *screen = terminal_screen_new (profile, NULL, NULL, NULL,
+                                                 directory, child_env, 1.0);
+  terminal_screen_set_force_shell (screen);
+  if (ssh_command != NULL && *ssh_command != '\0')
+    terminal_screen_set_startup_ssh (screen, ssh_command, ssh_credential);
+  return screen;
+}
+
+gboolean
+terminal_app_restore_session (TerminalApp *app,
+                              const char *startup_id,
+                              char **child_env)
+{
+  if (has_other_terminal_window (app, NULL))
+    return FALSE;
+
+  gs_unref_object GSettings *settings = g_settings_new (TERMINAL_SETTING_SCHEMA);
+  gs_unref_variant GVariant *state = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_KEY);
+  gs_unref_variant GVariant *tabs = NULL;
+  guint selected;
+  g_variant_get (state, "(u@a(ayay))", &selected, &tabs);
+  if (g_variant_n_children (tabs) == 0)
+    return FALSE;
+
+  gs_unref_variant GVariant *ssh_config = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
+  gsize ssh_count = g_variant_n_children (ssh_config);
+
+  gs_unref_object GSettings *profile = terminal_settings_list_ref_default_child (app->profiles_list);
+  TerminalWindow *window = terminal_app_new_window (app, 0);
+  if (startup_id != NULL)
+    gtk_window_set_startup_id (GTK_WINDOW (window), startup_id);
+
+  TerminalMdiContainer *container = TERMINAL_MDI_CONTAINER (terminal_window_get_mdi_container (window));
+  GVariantIter iter, ssh_iter;
+  const char *directory, *peer_directory;
+  TerminalScreen *active = NULL;
+  guint index = 0;
+  g_variant_iter_init (&iter, tabs);
+  g_variant_iter_init (&ssh_iter, ssh_config);
+  while (g_variant_iter_next (&iter, "(^&ay^&ay)", &directory, &peer_directory)) {
+    const char *command = NULL, *credential = NULL;
+    const char *peer_command = NULL, *peer_credential = NULL;
+    if (index < ssh_count)
+      g_variant_iter_next (&ssh_iter, "((&s&s)(&s&s))", &command, &credential, &peer_command, &peer_credential);
+
+    TerminalScreen *screen = new_session_screen (profile, directory, child_env, command, credential);
+    if (*peer_directory != '\0') {
+      TerminalScreen *peer = new_session_screen (profile, peer_directory, child_env, peer_command, peer_credential);
+      terminal_notebook_add_split (TERMINAL_NOTEBOOK (container), screen, peer);
+      _terminal_screen_launch_child_on_idle (peer);
+    } else {
+      terminal_window_add_screen (window, screen, -1);
+    }
+    _terminal_screen_launch_child_on_idle (screen);
+    if (active == NULL || index == selected)
+      active = screen;
+    ++index;
+  }
+
+  terminal_window_switch_screen (window, active);
+  gtk_widget_grab_focus (GTK_WIDGET (active));
+  gtk_window_present (GTK_WINDOW (window));
+  g_settings_delay (settings);
+  g_settings_reset (settings, TERMINAL_SETTING_SESSION_KEY);
+  g_settings_reset (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
+  g_settings_apply (settings);
+  return TRUE;
 }
 
 TerminalScreen *

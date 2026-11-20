@@ -3,7 +3,7 @@ NULL =
 BUILT_SOURCES =
 
 bin_PROGRAMS = gnome-terminal
-libexec_PROGRAMS = gnome-terminal-server
+libexec_PROGRAMS = gnome-terminal-server gnome-terminal-ssh
 noinst_PROGRAMS =
 
 check_PROGRAMS = terminal-regex
@@ -84,6 +84,8 @@ gnome_terminal_server_SOURCES = \
 	terminal-screen-container.h \
 	terminal-search-popover.c \
 	terminal-search-popover.h \
+	terminal-ssh.c \
+	terminal-ssh.h \
 	terminal-tab-label.c \
 	terminal-tab-label.h \
 	terminal-util.c \
@@ -114,6 +116,12 @@ gnome_terminal_server_LDADD = \
 	$(TERM_LIBS) \
 	$(PTHREAD_LIBS) \
 	$(NULL)
+
+# OpenSSH askpass and Secret Service run on the host session bus.
+gnome_terminal_ssh_SOURCES = terminal-ssh-helper.c terminal-i18n.c terminal-i18n.h
+gnome_terminal_ssh_CPPFLAGS = -DTERM_LOCALEDIR="\"$(datadir)/locale\"" $(AM_CPPFLAGS)
+gnome_terminal_ssh_CFLAGS = $(SSH_HELPER_CFLAGS) $(WARN_CFLAGS) $(AM_CFLAGS)
+gnome_terminal_ssh_LDADD = $(SSH_HELPER_LIBS)
 
 TYPES_H_FILES = \
 	terminal-enums.h \

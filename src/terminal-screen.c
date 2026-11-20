@@ -60,6 +60,7 @@
 #include "terminal-window.h"
 #include "terminal-info-bar.h"
 #include "terminal-libgsystem.h"
+#include "terminal-ssh.h"
 
 #include "eggshell.h"
 
@@ -95,6 +96,10 @@ struct _TerminalScreenPrivate
   char **initial_env;
   char **override_command;
   gboolean shell;
+  gboolean force_shell;
+  char *startup_ssh_command;
+  char *startup_ssh_credential;
+  gboolean keep_startup_ssh;
   int child_pid;
   GSList *match_tags;
   guint launch_child_source_id;
@@ -617,6 +622,11 @@ terminal_screen_dispose (GObject *object)
     priv->registered = FALSE;
   }
 
+  if (!priv->keep_startup_ssh && priv->startup_ssh_credential != NULL) {
+    terminal_ssh_forget_password (priv->startup_ssh_credential);
+    g_clear_pointer (&priv->startup_ssh_credential, g_free);
+  }
+
   G_OBJECT_CLASS (terminal_screen_parent_class)->dispose (object);
 }
 
@@ -636,6 +646,8 @@ terminal_screen_finalize (GObject *object)
   g_free (priv->custom_title);
   g_strfreev (priv->override_command);
   g_strfreev (priv->initial_env);
+  g_free (priv->startup_ssh_command);
+  g_free (priv->startup_ssh_credential);
 
   g_slist_foreach (priv->match_tags, (GFunc) free_tag_data, NULL);
   g_slist_free (priv->match_tags);
@@ -725,6 +737,41 @@ terminal_screen_set_project_launch (TerminalScreen *screen,
 {
   screen->priv->project_launch = TRUE;
   screen->priv->confirm_direct_child = confirm_direct_child;
+}
+
+void
+terminal_screen_set_force_shell (TerminalScreen *screen)
+{
+  screen->priv->force_shell = TRUE;
+}
+
+const char *
+terminal_screen_get_startup_ssh (TerminalScreen *screen,
+                                 const char **credential)
+{
+  *credential = screen->priv->startup_ssh_credential;
+  return screen->priv->startup_ssh_command;
+}
+
+void
+terminal_screen_set_startup_ssh (TerminalScreen *screen,
+                                 const char *command,
+                                 const char *credential)
+{
+  TerminalScreenPrivate *priv = screen->priv;
+  char *new_command = command != NULL && *command != '\0' ? g_strdup (command) : NULL;
+  char *new_credential = new_command != NULL && credential != NULL && *credential != '\0' ?
+                         g_strdup (credential) : NULL;
+  g_free (priv->startup_ssh_command);
+  g_free (priv->startup_ssh_credential);
+  priv->startup_ssh_command = new_command;
+  priv->startup_ssh_credential = new_credential;
+}
+
+void
+terminal_screen_keep_startup_ssh (TerminalScreen *screen)
+{
+  screen->priv->keep_startup_ssh = TRUE;
 }
 
 gboolean 
@@ -1137,7 +1184,14 @@ get_child_command (TerminalScreen *screen,
 
       *spawn_flags_p |= G_SPAWN_SEARCH_PATH;
     }
-  else if (g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY))
+  else if (priv->force_shell && priv->startup_ssh_command != NULL)
+    {
+      argv = terminal_ssh_build_argv (priv->startup_ssh_command, priv->startup_ssh_credential, err);
+      if (argv == NULL)
+        return FALSE;
+      priv->confirm_direct_child = TRUE;
+    }
+  else if (!priv->force_shell && g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY))
     {
       gs_free char *argv_str;
 
@@ -1446,6 +1500,7 @@ terminal_screen_do_exec (TerminalScreen *screen,
 
   if (priv->initial_working_directory &&
       (priv->project_launch ||
+       priv->force_shell ||
        priv->override_command != NULL ||
        !g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY)))
     working_dir = priv->initial_working_directory;
@@ -1744,11 +1799,16 @@ terminal_screen_child_exited (VteTerminal *terminal,
                          screen);
 
   priv->child_pid = -1;
+  if (gtk_widget_in_destruction (GTK_WIDGET (screen)))
+    return;
   
   action = g_settings_get_enum (priv->profile, TERMINAL_PROFILE_EXIT_ACTION_KEY);
 
+  /* Keep failed SSH connections visible; never reconnect in an automatic loop. */
+  if (priv->force_shell && priv->startup_ssh_command != NULL)
+    action = TERMINAL_EXIT_HOLD;
   /* Shell exit isn't a request to close the other shell in the same tab. */
-  if (action == TERMINAL_EXIT_CLOSE && terminal_notebook_get_peer (screen) != NULL)
+  else if (action == TERMINAL_EXIT_CLOSE && terminal_notebook_get_peer (screen) != NULL)
     action = TERMINAL_EXIT_HOLD;
   
   switch (action)
