@@ -53,10 +53,9 @@ terminal_ssh_build_argv (const char *command,
 }
 
 static GSubprocess *
-run_keyring_helper (const char *operation,
-                    const char *credential,
-                    gboolean store,
-                    GError **error)
+run_password_helper (const char *operation,
+                     const char *credential,
+                     gboolean store)
 {
   gs_free char *helper = helper_path ();
   const char *argv[] = { helper, operation, credential, NULL };
@@ -65,19 +64,13 @@ run_keyring_helper (const char *operation,
                                G_SUBPROCESS_FLAGS_STDERR_SILENCE |
                                (store ? G_SUBPROCESS_FLAGS_STDIN_PIPE : 0));
 
-  /* The portable Terminal server has its own bus; secrets belong to the desktop. */
-  if (g_getenv (TERMINAL_PORTABLE_ENV_ROOT) != NULL) {
-    gs_strfreev char **env = terminal_portable_restore_host_environment (g_get_environ ());
-    g_subprocess_launcher_set_environ (launcher, env);
-  }
-
-  return g_subprocess_launcher_spawnv (launcher, argv, error);
+  return g_subprocess_launcher_spawnv (launcher, argv, NULL);
 }
 
 void
 terminal_ssh_forget_password (const char *credential)
 {
-  gs_unref_object GSubprocess *process = run_keyring_helper ("--forget", credential, FALSE, NULL);
+  gs_unref_object GSubprocess *process = run_password_helper ("--forget", credential, FALSE);
 }
 
 typedef struct {
@@ -109,9 +102,9 @@ free_password_buffer (gpointer data)
 }
 
 static void
-keyring_finished (GObject *source,
-                  GAsyncResult *result,
-                  gpointer data)
+password_update_finished (GObject *source,
+                          GAsyncResult *result,
+                          gpointer data)
 {
   gs_unref_object GtkDialog *dialog = data;
   SshDialog *form = g_object_get_data (G_OBJECT (dialog), "ssh-form");
@@ -140,7 +133,7 @@ keyring_finished (GObject *source,
     gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_ACCEPT, TRUE);
     gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_REJECT, TRUE);
     gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_CANCEL, TRUE);
-    gtk_label_set_text (form->status, _("Could not update the password. Unlock your system keyring and try again."));
+    gtk_label_set_text (form->status, _("Could not update the password in your home directory."));
   }
 }
 
@@ -202,11 +195,11 @@ configure_response (GtkDialog *dialog,
     uuid_unparse (uuid, new_credential);
   }
 
-  gs_unref_object GSubprocess *process = run_keyring_helper (store ? "--store" : "--forget",
-                                                             store ? new_credential : old_credential,
-                                                             store, NULL);
+  gs_unref_object GSubprocess *process = store ?
+    run_password_helper ("--store", new_credential, TRUE) :
+    run_password_helper ("--forget", old_credential, FALSE);
   if (process == NULL) {
-    gtk_label_set_text (form->status, _("Could not start the system keyring helper."));
+    gtk_label_set_text (form->status, _("Could not start the SSH password helper."));
     return;
   }
 
@@ -218,13 +211,13 @@ configure_response (GtkDialog *dialog,
   gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_ACCEPT, FALSE);
   gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_REJECT, FALSE);
   gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_CANCEL, FALSE);
-  gtk_label_set_text (form->status, _("Updating the system keyring…"));
+  gtk_label_set_text (form->status, _("Updating the saved password…"));
   gs_unref_bytes GBytes *input = NULL;
   if (store) {
     char *buffer = g_strdup (password);
     input = g_bytes_new_with_free_func (buffer, strlen (buffer), free_password_buffer, buffer);
   }
-  g_subprocess_communicate_async (process, input, NULL, keyring_finished, g_object_ref (dialog));
+  g_subprocess_communicate_async (process, input, NULL, password_update_finished, g_object_ref (dialog));
   gtk_entry_set_text (form->password, "");
   gtk_widget_set_sensitive (gtk_dialog_get_content_area (dialog), FALSE);
 }
@@ -282,7 +275,8 @@ terminal_ssh_configure (GtkWindow *parent,
 
   GtkWidget *hint = new_form_label (credential != NULL ?
     _("Leave the password blank to keep it if the command is unchanged. Clear the command to disable reconnecting.") :
-    _("Leave the password blank to sign in manually. Saved passwords go to the system keyring."), NULL);
+    _("Leave the password blank to sign in manually. Saved passwords are stored as plain text in ~/.gnome-terminal-ssh/."),
+    NULL);
   gtk_label_set_max_width_chars (GTK_LABEL (hint), 46);
   gtk_label_set_max_width_chars (GTK_LABEL (status), 46);
   gtk_box_pack_start (GTK_BOX (content), new_form_label (_("SSH _command:"), command_entry), FALSE, FALSE, 0);

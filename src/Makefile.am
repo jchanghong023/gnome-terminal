@@ -117,7 +117,7 @@ gnome_terminal_server_LDADD = \
 	$(PTHREAD_LIBS) \
 	$(NULL)
 
-# OpenSSH askpass and Secret Service run on the host session bus.
+# OpenSSH askpass and password file operations.
 gnome_terminal_ssh_SOURCES = terminal-ssh-helper.c terminal-i18n.c terminal-i18n.h
 gnome_terminal_ssh_CPPFLAGS = -DTERM_LOCALEDIR="\"$(datadir)/locale\"" $(AM_CPPFLAGS)
 gnome_terminal_ssh_CFLAGS = $(SSH_HELPER_CFLAGS) $(WARN_CFLAGS) $(AM_CFLAGS)

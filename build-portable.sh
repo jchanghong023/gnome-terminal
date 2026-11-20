@@ -44,9 +44,8 @@ mkdir -p "$bundle/lib/locale" "$bundle/share/dconf" "$bundle/share/licenses/gnom
 cp COPYING "$bundle/share/licenses/gnome-terminal/"
 cp -L "$(pkg-config --variable=libdir vte-2.91)/libvte-2.91.so.0" "$bundle/lib/"
 cp -L "$(pkg-config --variable=libdir libpcre2-8)/libpcre2-8.so.0" "$bundle/lib/"
-cp -L "$(pkg-config --variable=libdir libsecret-1)/libsecret-1.so.0" "$bundle/lib/"
 # Keep native desktop libraries such as GTK and GLib provided by CentOS.
-for dependency in vte291 pcre2 libsecret; do
+for dependency in vte291 pcre2; do
   rpm -ql "$dependency" | grep '^/usr/share/licenses/[^/]*/[^/]*$' | while IFS= read -r license; do
     if [ -f "$license" ]; then
       mkdir -p "$bundle/share/licenses/$dependency"

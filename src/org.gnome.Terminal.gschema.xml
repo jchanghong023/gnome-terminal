@@ -750,7 +750,7 @@
 
     <key name="terminal-session-ssh" type="a((ss)(ss))">
       <default>[]</default>
-      <summary>OpenSSH commands and system keyring references for saved terminal panes</summary>
+      <summary>OpenSSH commands and saved password file references for terminal panes</summary>
     </key>
 
    <!-- <child name="profiles" schema="org.gnome.Terminal.ProfilesList" /> -->

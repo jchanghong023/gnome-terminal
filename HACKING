@@ -28,19 +28,19 @@ to the selected pane. Close the last window normally to save the session.
 Clear the command to disable reconnection, or choose Forget Password to keep
 the command and sign in manually.
 
-The session stores the command and a keyring reference, never the password.
-Do not put secrets in the command itself. Password autofill requires the
-desktop's Secret Service and applies only to standard SSH password
-authentication, not interactive challenges or jump hosts. An unknown host
-key requires confirmation; a changed host key blocks the connection.
+The session stores the command and a password file reference. Passwords are
+stored as plain text in ~/.gnome-terminal-ssh/ (directory mode 0700, new files
+mode 0600). Passwords previously saved to a keyring must be entered again.
+Do not put passwords in the command itself. Autofill only applies to standard
+SSH password authentication, not interactive challenges or jump hosts. An
+unknown host key requires confirmation; a changed host key blocks the connection.
 Reopening starts a new SSH session, not the previous remote shell or directory.
 
 CentOS 7 portable build
 =======================
 
-Build on CentOS 7 x86_64 with the GTK 3, VTE, and libsecret development
-packages and the usual GNOME Terminal build tools. With the build toolchain
-enabled, run:
+Build on CentOS 7 x86_64 with the GTK 3 and VTE development packages and the
+usual GNOME Terminal build tools. With the build toolchain enabled, run:
 
     sh build-portable.sh /path/to/gnome-terminal-centos7-x86_64.run
 

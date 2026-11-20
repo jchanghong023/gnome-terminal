@@ -7,15 +7,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
 
+#include <glib/gstdio.h>
 #include <glib/gi18n.h>
 #include <gtk/gtk.h>
-#include <libsecret/secret.h>
 #include <uuid.h>
 
 #include "terminal-i18n.h"
@@ -23,10 +24,8 @@
 #define SSH_PID_ENV "GNOME_TERMINAL_ASKPASS_PID"
 #define SSH_CREDENTIAL_ENV "GNOME_TERMINAL_ASKPASS_CREDENTIAL"
 
-static const SecretSchema password_schema = {
-  .name = "org.gnome.Terminal.SshPassword",
-  .attributes = { { "credential", SECRET_SCHEMA_ATTRIBUTE_STRING }, { NULL, 0 } }
-};
+#define PASSWORD_LIMIT 1022
+#define PASSWORD_DIRECTORY ".gnome-terminal-ssh"
 
 static gboolean
 credential_valid (const char *credential)
@@ -35,34 +34,72 @@ credential_valid (const char *credential)
   return credential != NULL && uuid_parse (credential, uuid) == 0;
 }
 
+static gboolean
+password_valid (const char *password,
+                gsize length)
+{
+  return length > 0 && length <= PASSWORD_LIMIT &&
+         memchr (password, '\0', length) == NULL &&
+         memchr (password, '\n', length) == NULL &&
+         memchr (password, '\r', length) == NULL;
+}
+
+static void
+clear_password (volatile char *password,
+                gsize length)
+{
+  while (length-- != 0)
+    *password++ = '\0';
+}
+
 static int
 store_password (const char *credential)
 {
-  char password[1023];
+  char password[PASSWORD_LIMIT + 1];
   size_t length = fread (password, 1, sizeof password, stdin);
   gboolean stored = FALSE;
-  if (!ferror (stdin) && length > 0 && length < sizeof password &&
-      memchr (password, '\0', length) == NULL && memchr (password, '\n', length) == NULL &&
-      memchr (password, '\r', length) == NULL) {
-    password[length] = '\0';
-    stored = secret_password_store_sync (&password_schema, SECRET_COLLECTION_DEFAULT,
-                                          _("GNOME Terminal SSH password"), password, NULL, NULL,
-                                          "credential", credential, NULL);
+  if (!ferror (stdin) && password_valid (password, length)) {
+    char *directory = g_build_filename (g_get_home_dir (), PASSWORD_DIRECTORY, NULL);
+    GStatBuf info;
+
+    umask (0077);
+    if ((g_mkdir (directory, 0700) == 0 || errno == EEXIST) &&
+        g_lstat (directory, &info) == 0 && S_ISDIR (info.st_mode) &&
+        info.st_uid == geteuid () && (info.st_mode & 0077) == 0) {
+      char *path = g_build_filename (directory, credential, NULL);
+      stored = g_file_set_contents (path, password, length, NULL);
+      g_free (path);
+    }
+    g_free (directory);
   }
-  for (volatile char *p = password; p < password + sizeof password; p++)
-    *p = '\0';
+  clear_password (password, sizeof password);
   return stored ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 static int
 forget_password (const char *credential)
 {
-  GError *error = NULL;
-  secret_password_clear_sync (&password_schema, NULL, &error, "credential", credential, NULL);
-  if (error == NULL)
-    return EXIT_SUCCESS;
-  g_error_free (error);
-  return EXIT_FAILURE;
+  char *path = g_build_filename (g_get_home_dir (), PASSWORD_DIRECTORY, credential, NULL);
+  gboolean removed = g_unlink (path) == 0 || errno == ENOENT;
+  g_free (path);
+  return removed ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+static gboolean
+send_saved_password (const char *credential)
+{
+  char *path = g_build_filename (g_get_home_dir (), PASSWORD_DIRECTORY, credential, NULL);
+  char *password = NULL;
+  gsize length;
+  gboolean sent = FALSE;
+  if (g_file_get_contents (path, &password, &length, NULL)) {
+    if (password_valid (password, length))
+      sent = puts (password) != EOF;
+    clear_password (password, length);
+    g_free (password);
+  }
+  g_free (path);
+  return sent;
 }
 
 static gboolean
@@ -148,15 +185,9 @@ askpass (const char *argument)
   const char *credential = g_getenv (SSH_CREDENTIAL_ENV);
   /* A jump host, proxy or confirmation dialog must never receive this password. */
   if (g_strcmp0 (pid, g_getenv (SSH_PID_ENV)) == 0 && credential_valid (credential) &&
-      g_getenv ("SSH_ASKPASS_PROMPT") == NULL && is_login_password_prompt (argument)) {
-    char *password = secret_password_lookup_sync (&password_schema, NULL, NULL,
-                                                   "credential", credential, NULL);
-    if (password != NULL) {
-      gboolean sent = puts (password) != EOF;
-      secret_password_free (password);
-      return sent && fflush (stdout) != EOF ? EXIT_SUCCESS : EXIT_FAILURE;
-    }
-  }
+      g_getenv ("SSH_ASKPASS_PROMPT") == NULL && is_login_password_prompt (argument) &&
+      send_saved_password (credential))
+    return fflush (stdout) != EOF ? EXIT_SUCCESS : EXIT_FAILURE;
 
   return prompt_manually (argument) && fflush (stdout) != EOF ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -95,7 +95,7 @@ PKG_CHECK_MODULES([TERM],
    $PLATFORM_DEPS])
 
 PKG_CHECK_MODULES([SSH_HELPER],
-  [gtk+-$GTK_API_VERSION >= $GTK_REQUIRED libsecret-1 >= 0.18 uuid])
+  [gtk+-$GTK_API_VERSION >= $GTK_REQUIRED uuid])
 
 # ****
 # DBus
