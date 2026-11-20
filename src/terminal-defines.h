@@ -63,6 +63,7 @@ terminal_portable_restore_host_environment (char **envv)
     HOST_ENV (DBUS_STARTER_BUS_TYPE),
     HOST_ENV (DCONF_PROFILE),
     HOST_ENV (XDG_DATA_DIRS),
+    HOST_ENV (XDG_RUNTIME_DIR),
     HOST_ENV (GSETTINGS_SCHEMA_DIR),
 #undef HOST_ENV
   };

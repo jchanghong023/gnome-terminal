@@ -32,6 +32,11 @@ use the launching desktop's session bus and settings instead. Terminal
 keeps its own dark theme without overriding the user's GTK_THEME for
 other applications.
 
+The launcher extracts to /dev/shm by default, or to TMPDIR if set.
+For remote X11 sessions with an inaccessible or missing XDG_RUNTIME_DIR,
+the bundle uses a private runtime directory rather than writing to
+/run/user. Terminal settings remain in the portable dconf database.
+
 The launcher keeps working host UTF-8 locales and uses a bundled locale
 when needed: zhcn.utf-8 becomes zh_CN.UTF-8; other unavailable locales fall
 back to en_US.UTF-8. Child commands keep this locale fallback. System

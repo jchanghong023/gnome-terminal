@@ -78,7 +78,7 @@ for command in dbus-run-session gdbus gio; do
   fi
 done
 
-root=$(mktemp -d)
+root=$(mktemp -d "${TMPDIR:-/dev/shm}/gnome-terminal.XXXXXXXXXX")
 trap 'rm -rf -- "$root"' EXIT
 trap 'exit 1' HUP INT TERM
 payload=$(LC_ALL=C awk '/^__GNOME_TERMINAL_PAYLOAD__$/ { print NR + 1; exit }' "$0")
@@ -116,6 +116,18 @@ save_host_env DBUS_STARTER_BUS_TYPE "${DBUS_STARTER_BUS_TYPE+x}" "${DBUS_STARTER
 save_host_env DCONF_PROFILE "${DCONF_PROFILE+x}" "${DCONF_PROFILE-}"
 save_host_env XDG_DATA_DIRS "${XDG_DATA_DIRS+x}" "${XDG_DATA_DIRS-}"
 save_host_env GSETTINGS_SCHEMA_DIR "${GSETTINGS_SCHEMA_DIR+x}" "${GSETTINGS_SCHEMA_DIR-}"
+save_host_env XDG_RUNTIME_DIR "${XDG_RUNTIME_DIR+x}" "${XDG_RUNTIME_DIR-}"
+
+# SSH X11 sessions may inherit an absent or inaccessible login runtime
+# directory. Both dconf and its writer need a writable place for their flags.
+runtime=${XDG_RUNTIME_DIR-}
+if [ ! -d "$runtime" ] || [ ! -w "$runtime" ] || [ ! -x "$runtime" ] ||
+   [ "$(stat -Lc '%u' -- "$runtime")" != "$(id -u)" ] ||
+   { [ -e "$runtime/dconf" ] && { [ ! -d "$runtime/dconf" ] ||
+       [ ! -w "$runtime/dconf" ] || [ ! -x "$runtime/dconf" ]; }; }; then
+  mkdir -m 700 "$root/runtime"
+  export XDG_RUNTIME_DIR="$root/runtime"
+fi
 
 session_config=/usr/share/dbus-1/session.conf
 if [ ! -r "$session_config" ]; then
