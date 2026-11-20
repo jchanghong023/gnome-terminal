@@ -2240,6 +2240,84 @@ msgstr "该终端中仍然有一个进程在运行。关闭终端将杀死该进
 msgid "C_lose Window"
 msgstr "关闭窗口(_L)"
 
+#: ../src/terminal-window.c
+msgid "Close the last tab?"
+msgstr "关闭最后一个标签页？"
+
+#: ../src/terminal-window.c
+msgid "This will also close the window and end any commands running in the tab."
+msgstr "这也会关闭当前窗口，并结束此标签页中运行的命令。"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Default Project"
+msgstr "默认项目"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Sidebar options"
+msgstr "侧栏选项"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Project options"
+msgstr "项目选项"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Tab options"
+msgstr "标签页选项"
+
+#: ../src/terminal-project-sidebar.c
+msgid "_Add Working Directory…"
+msgstr "添加工作目录(_A)…"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Add Current Directory"
+msgstr "添加当前目录"
+
+#: ../src/terminal-project-sidebar.c
+msgid "New terminal in this project"
+msgstr "在此项目中新建终端"
+
+#: ../src/terminal-project-sidebar.c
+msgid "New split terminal tab in this project"
+msgstr "在此项目中新建分屏终端标签页"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Rename Tab…"
+msgstr "重命名标签页…"
+
+#: ../src/terminal-project-sidebar.c
+#, c-format
+msgid "Project added: %s"
+msgstr "已收藏：%s"
+
+#: ../src/terminal-project-sidebar.c
+msgid "This directory is already a project"
+msgstr "此目录已收藏"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Could not determine the current local directory"
+msgstr "无法确定当前本地目录"
+
+#: ../src/terminal-project-sidebar.c
+msgid "Add Remote Directory"
+msgstr "添加远程目录"
+
+#: ../src/terminal-project-sidebar.c
+#, c-format
+msgid "SSH command: %s"
+msgstr "SSH 命令：%s"
+
+#: ../src/terminal-project-sidebar.c
+msgid "_Absolute directory:"
+msgstr "绝对路径(_A)："
+
+#: ../src/terminal-project-sidebar.c
+msgid "Enter an absolute directory starting with a slash (/)."
+msgstr "请输入以斜杠（/）开头的绝对路径。"
+
+#: ../src/terminal-project-sidebar.c
+msgid "This directory is already a project. Enter a different directory."
+msgstr "此目录已收藏，请输入其他目录。"
+
 #~ msgid "Unnamed"
 #~ msgstr "未命名"
 

@@ -118,7 +118,7 @@ gnome_terminal_server_LDADD = \
 	$(NULL)
 
 # OpenSSH askpass and password file operations.
-gnome_terminal_ssh_SOURCES = terminal-ssh-helper.c terminal-i18n.c terminal-i18n.h
+gnome_terminal_ssh_SOURCES = terminal-ssh-helper.c terminal-debug.c terminal-debug.h terminal-i18n.c terminal-i18n.h
 gnome_terminal_ssh_CPPFLAGS = -DTERM_LOCALEDIR="\"$(datadir)/locale\"" $(AM_CPPFLAGS)
 gnome_terminal_ssh_CFLAGS = $(SSH_HELPER_CFLAGS) $(WARN_CFLAGS) $(AM_CFLAGS)
 gnome_terminal_ssh_LDADD = $(SSH_HELPER_LIBS)

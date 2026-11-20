@@ -739,13 +739,13 @@
     </key>
 
     <key name="project-sidebar-width" type="i">
-      <default>268</default>
+      <default>408</default>
       <summary>Width of the project sidebar in pixels</summary>
     </key>
 
     <key name="collapsed-project-directories" type="as">
       <default>[]</default>
-      <summary>URIs of projects collapsed in the sidebar</summary>
+      <summary>IDs of projects collapsed in the sidebar</summary>
     </key>
 
     <key name="terminal-session" type="(ua(ayay))">
@@ -761,6 +761,11 @@
     <key name="terminal-session-ssh-startup" type="a((ays)(ays))">
       <default>[]</default>
       <summary>Remote working directories and post-login commands of SSH panes in the last closed terminal window</summary>
+    </key>
+
+    <key name="terminal-session-titles" type="as">
+      <default>[]</default>
+      <summary>Custom tab names in the last closed terminal window</summary>
     </key>
 
    <!-- <child name="profiles" schema="org.gnome.Terminal.ProfilesList" /> -->

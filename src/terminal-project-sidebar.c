@@ -12,14 +12,14 @@
 #include "terminal-schemas.h"
 #include "terminal-ssh.h"
 
-#define PROJECT_TERMINAL_INDENT 76
+#define PROJECT_TERMINAL_INDENT 36
 #define REMOTE_PROJECT_URI_PREFIX "ssh-project://"
+#define DEFAULT_PROJECT_ID "default"
 #define SCREEN_KEY "terminal-project-screen"
 #define DIRECTORY_KEY "terminal-project-directory"
 #define PROJECT_ROW_KEY "terminal-project-row"
 #define PROJECT_NAME_KEY "terminal-project-search-name"
 #define PROJECT_TOGGLE_KEY "terminal-project-toggle"
-#define PROJECT_COUNT_KEY "terminal-project-count"
 
 typedef struct {
   TerminalWindow *window;
@@ -29,6 +29,8 @@ typedef struct {
   GtkListBoxRow *active_project;
   GtkListBoxRow *search_target;
   GtkWidget *search;
+  GtkWidget *bookmark_notice;
+  GtkWidget *bookmark_status;
   GtkScrolledWindow *scroll;
   char *search_query;
 } ProjectSidebar;
@@ -39,12 +41,18 @@ typedef struct {
   const char *login_command;
 } SshProject;
 
+typedef enum {
+  PROJECT_UPDATE_OK,
+  PROJECT_UPDATE_DUPLICATE,
+  PROJECT_UPDATE_FAILED
+} ProjectUpdate;
+
 static void select_terminal (GtkListBox *list, TerminalScreen *screen);
 static void choose_directory (GtkListBox *list, const char *old_uri);
-static gboolean update_project_directory (GtkListBox *list,
-                                          const char *old_uri,
-                                          const char *uri,
-                                          const SshProject *ssh);
+static ProjectUpdate update_project_directory (GtkListBox *list,
+                                               const char *old_uri,
+                                               const char *uri,
+                                               const SshProject *ssh);
 
 static void
 free_sidebar (gpointer data)
@@ -71,9 +79,17 @@ get_row_list (GtkListBoxRow *row)
 static GtkListBoxRow *
 get_project_row (GtkListBoxRow *row)
 {
-  if (g_object_get_data (G_OBJECT (row), DIRECTORY_KEY) != NULL)
+  if (g_object_get_data (G_OBJECT (row), PROJECT_NAME_KEY) != NULL)
     return row;
   return g_object_get_data (G_OBJECT (row), PROJECT_ROW_KEY);
+}
+
+static const char *
+project_id (GtkListBoxRow *row)
+{
+  const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
+
+  return uri != NULL ? uri : DEFAULT_PROJECT_ID;
 }
 
 static void
@@ -91,18 +107,27 @@ mark_row (GtkListBoxRow **current,
 }
 
 static void
-show_error (TerminalWindow *window,
-            const char *message,
-            const char *detail)
+show_project_message (TerminalWindow *window,
+                      GtkMessageType type,
+                      const char *message,
+                      const char *detail)
 {
   GtkWidget *dialog = gtk_message_dialog_new (GTK_WINDOW (window),
                                              GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                                             GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE,
+                                             type, GTK_BUTTONS_CLOSE,
                                              "%s", message);
   if (detail != NULL)
     gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), "%s", detail);
   g_signal_connect_swapped (dialog, "response", G_CALLBACK (gtk_widget_destroy), dialog);
-  gtk_widget_show (dialog);
+  gtk_window_present (GTK_WINDOW (dialog));
+}
+
+static void
+show_error (TerminalWindow *window,
+            const char *message,
+            const char *detail)
+{
+  show_project_message (window, GTK_MESSAGE_ERROR, message, detail);
 }
 
 static gboolean
@@ -156,25 +181,33 @@ new_label (const char *text)
   return label;
 }
 
-static GtkWidget *
-new_button_with_image (GtkWidget *image,
-                       const char *name)
+static void
+show_bookmark_status (ProjectSidebar *sidebar,
+                      const char *path)
 {
-  GtkWidget *button = gtk_button_new ();
+  gs_free char *name = g_filename_display_basename (path);
+  gs_free char *message = g_strdup_printf (_("Project added: %s"), name);
+  gs_free char *display_path = g_filename_display_name (path);
 
-  gtk_button_set_image (GTK_BUTTON (button), image);
-
-  gtk_button_set_relief (GTK_BUTTON (button), GTK_RELIEF_NONE);
-  gtk_widget_set_tooltip_text (button, name);
-  atk_object_set_name (gtk_widget_get_accessible (button), name);
-  return button;
+  gtk_label_set_text (GTK_LABEL (sidebar->bookmark_status), message);
+  gtk_widget_set_tooltip_text (sidebar->bookmark_status, display_path);
+  gtk_widget_show (sidebar->bookmark_notice);
 }
 
 static GtkWidget *
-new_icon_button (const char *icon,
-                 const char *name)
+new_options_button (GtkWidget *menu,
+                    const char *name)
 {
-  return new_button_with_image (gtk_image_new_from_icon_name (icon, GTK_ICON_SIZE_MENU), name);
+  GtkWidget *button = gtk_menu_button_new ();
+
+  gtk_button_set_image (GTK_BUTTON (button),
+                        gtk_image_new_from_icon_name ("view-more-symbolic", GTK_ICON_SIZE_MENU));
+  gtk_button_set_relief (GTK_BUTTON (button), GTK_RELIEF_NONE);
+  gtk_widget_set_tooltip_text (button, name);
+  atk_object_set_name (gtk_widget_get_accessible (button), name);
+  gtk_widget_show_all (menu);
+  gtk_menu_button_set_popup (GTK_MENU_BUTTON (button), menu);
+  return button;
 }
 
 static gboolean
@@ -183,7 +216,6 @@ filter_sidebar_row (GtkListBoxRow *row,
 {
   ProjectSidebar *sidebar = user_data;
   GtkListBoxRow *project = get_project_row (row);
-  const char *uri;
 
   if (project == NULL)
     return sidebar->search_query == NULL;
@@ -193,8 +225,7 @@ filter_sidebar_row (GtkListBoxRow *row,
   if (row == project)
     return TRUE;
 
-  uri = g_object_get_data (G_OBJECT (project), DIRECTORY_KEY);
-  return !g_hash_table_contains (sidebar->collapsed, uri);
+  return !g_hash_table_contains (sidebar->collapsed, project_id (project));
 }
 
 static void
@@ -237,9 +268,9 @@ update_collapsed_projects (GtkListBox *list)
   for (int i = 0; (row = gtk_list_box_get_row_at_index (list, i)) != NULL; i++) {
     GtkWidget *toggle = g_object_get_data (G_OBJECT (row), PROJECT_TOGGLE_KEY);
     if (toggle != NULL) {
-      const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
+      const char *id = project_id (row);
       GtkImage *icon = g_object_get_data (G_OBJECT (toggle), "project-expander");
-      update_project_expander (toggle, icon, g_hash_table_contains (sidebar->collapsed, uri));
+      update_project_expander (toggle, icon, g_hash_table_contains (sidebar->collapsed, id));
     }
   }
 
@@ -278,9 +309,9 @@ toggle_project (GtkButton *button,
                 GtkListBoxRow *row)
 {
   ProjectSidebar *sidebar = get_sidebar (get_row_list (row));
-  const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
+  const char *id = project_id (row);
 
-  set_project_collapsed (sidebar, uri, !g_hash_table_contains (sidebar->collapsed, uri));
+  set_project_collapsed (sidebar, id, !g_hash_table_contains (sidebar->collapsed, id));
 }
 
 static void
@@ -291,10 +322,11 @@ open_project_tab (GtkListBoxRow *row,
   ProjectSidebar *sidebar = get_sidebar (get_row_list (row));
   const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
   gboolean remote = is_remote_project (uri);
-  gs_unref_object GFile *directory = remote ? NULL : g_file_new_for_uri (uri);
-  gs_free char *path = remote ? dup_remote_project_path (uri) : g_file_get_path (directory);
+  gs_unref_object GFile *directory = uri != NULL && !remote ? g_file_new_for_uri (uri) : NULL;
+  gs_free char *path = remote ? dup_remote_project_path (uri) :
+                      directory != NULL ? g_file_get_path (directory) : NULL;
 
-  if (!remote && (path == NULL || !g_file_test (path, G_FILE_TEST_IS_DIR))) {
+  if (directory != NULL && (path == NULL || !g_file_test (path, G_FILE_TEST_IS_DIR))) {
     gs_free char *name = g_file_get_parse_name (directory);
     show_error (sidebar->window, _("Working directory is unavailable"), name);
     return;
@@ -329,21 +361,29 @@ open_project_tab (GtkListBoxRow *row,
     return;
   }
 
-  TerminalNewTerminalFlags flags = TERMINAL_NEW_TERMINAL_PROJECT;
+  TerminalNewTerminalFlags flags = uri != NULL ? TERMINAL_NEW_TERMINAL_PROJECT :
+                                                TERMINAL_NEW_TERMINAL_DEFAULT;
 
   if (split)
     flags |= TERMINAL_NEW_TERMINAL_SPLIT;
 
-  set_project_collapsed (sidebar, uri, FALSE);
+  set_project_collapsed (sidebar, project_id (row), FALSE);
   terminal_app_new_terminal (app, sidebar->window, profile, NULL, command, NULL, path,
                              environment, 1.0, flags);
 }
 
 static void
-open_project_terminal (GtkButton *button,
+open_project_terminal (GtkMenuItem *item,
                        GtkListBoxRow *row)
 {
-  open_project_tab (row, NULL, GPOINTER_TO_INT (g_object_get_data (G_OBJECT (button), "split-tab")));
+  open_project_tab (row, NULL, FALSE);
+}
+
+static void
+open_project_split_terminal (GtkMenuItem *item,
+                             GtkListBoxRow *row)
+{
+  open_project_tab (row, NULL, TRUE);
 }
 
 static void
@@ -470,19 +510,26 @@ new_project_menu (GtkListBoxRow *row,
                   gboolean can_move_up,
                   gboolean can_move_down)
 {
-  GtkWidget *button = gtk_menu_button_new ();
+  const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
   GtkWidget *menu = gtk_menu_new ();
+  GtkWidget *terminal = gtk_menu_item_new_with_label (_("New terminal in this project"));
+  GtkWidget *split = gtk_menu_item_new_with_label (_("New split terminal tab in this project"));
+
+  g_signal_connect_object (terminal, "activate", G_CALLBACK (open_project_terminal), row, 0);
+  g_signal_connect_object (split, "activate", G_CALLBACK (open_project_split_terminal), row, 0);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), terminal);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), split);
+
+  if (uri == NULL)
+    return new_options_button (menu, _("Project options"));
+
   GtkWidget *neovim = gtk_menu_item_new_with_mnemonic (_("Open in _Neovim"));
   GtkWidget *change = gtk_menu_item_new_with_mnemonic (_("_Change Directory…"));
   GtkWidget *up = gtk_menu_item_new_with_mnemonic (_("Move Project _Up"));
   GtkWidget *down = gtk_menu_item_new_with_mnemonic (_("Move Project _Down"));
   GtkWidget *remove = gtk_menu_item_new_with_mnemonic (_("_Remove Project"));
 
-  gtk_button_set_image (GTK_BUTTON (button),
-                        gtk_image_new_from_icon_name ("view-more-symbolic", GTK_ICON_SIZE_MENU));
-  gtk_button_set_relief (GTK_BUTTON (button), GTK_RELIEF_NONE);
-  gtk_widget_set_tooltip_text (button, _("Project options"));
-  atk_object_set_name (gtk_widget_get_accessible (button), _("Project options"));
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), gtk_separator_menu_item_new ());
   gtk_widget_set_sensitive (neovim, !remote);
   gtk_widget_set_sensitive (change, !remote);
   gtk_widget_set_sensitive (up, can_move_up);
@@ -501,9 +548,7 @@ new_project_menu (GtkListBoxRow *row,
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), down);
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), gtk_separator_menu_item_new ());
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), remove);
-  gtk_widget_show_all (menu);
-  gtk_menu_button_set_popup (GTK_MENU_BUTTON (button), menu);
-  return button;
+  return new_options_button (menu, _("Project options"));
 }
 
 static GtkWidget *
@@ -515,7 +560,11 @@ new_group_row (GtkListBox *list,
 {
   GtkWidget *row = gtk_list_box_row_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-  GtkWidget *label;
+  const char *title;
+  gs_free char *name = NULL;
+  gs_free char *display_path = NULL;
+  gs_free char *detail = NULL;
+  gboolean remote = is_remote_project (uri);
   PangoAttrList *attrs = pango_attr_list_new ();
 
 #if GTK_CHECK_VERSION (3, 14, 0)
@@ -523,76 +572,53 @@ new_group_row (GtkListBox *list,
   gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
 #endif
   gtk_widget_set_can_focus (row, FALSE);
-  gtk_widget_set_margin_start (box, 10);
   gtk_widget_set_margin_end (box, 4);
   gtk_widget_set_margin_top (box, 6);
   gtk_container_add (GTK_CONTAINER (row), box);
 
   if (uri != NULL) {
-    gboolean remote = is_remote_project (uri);
     gs_unref_object GFile *directory = remote ? NULL : g_file_new_for_uri (uri);
     gs_free char *path = remote ? dup_remote_project_path (uri) : g_file_get_path (directory);
-    gs_free char *title = NULL;
-    gs_free char *detail = NULL;
+    display_path = remote
+      ? (path != NULL ? g_filename_display_name (path) : g_strdup (_("Remote Project")))
+      : g_file_get_parse_name (directory);
+    name = path != NULL ? g_filename_display_basename (path) : NULL;
+    title = name != NULL ? name : display_path;
     if (remote) {
       const char *command, *credential, *login_command;
-      title = path != NULL ? g_filename_display_name (path) : g_strdup (_("Remote Project"));
       if (g_variant_lookup (remote_projects, uri, "(&s&s&s)", &command, &credential, &login_command))
-        detail = g_strconcat (title, "\n", command, NULL);
-      else
-        detail = g_strdup (title);
-    } else {
-      title = path != NULL ? g_filename_display_basename (path) : g_file_get_parse_name (directory);
-      detail = g_file_get_parse_name (directory);
+        detail = g_strconcat (display_path, "\n", command, NULL);
     }
-    GtkWidget *button = new_icon_button ("list-add-symbolic", _("New terminal in this project"));
-    GtkWidget *split;
-    GtkWidget *split_icon = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
-    GtkWidget *plus = gtk_image_new_from_icon_name ("list-add-symbolic", GTK_ICON_SIZE_MENU);
-    GtkWidget *panes = gtk_image_new_from_icon_name ("view-dual-symbolic", GTK_ICON_SIZE_MENU);
-    GtkWidget *toggle = gtk_button_new ();
-    GtkWidget *heading = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-    GtkWidget *icon = gtk_image_new ();
-    GtkWidget *folder = gtk_image_new_from_icon_name ("folder-symbolic", GTK_ICON_SIZE_MENU);
-    GtkWidget *count = gtk_label_new (NULL);
-    GtkWidget *menu = new_project_menu (GTK_LIST_BOX_ROW (row), remote, can_move_up, can_move_down);
-
-    label = new_label (title);
-    gtk_button_set_relief (GTK_BUTTON (toggle), GTK_RELIEF_NONE);
-    gtk_widget_set_tooltip_text (toggle, detail);
-    atk_object_set_name (gtk_widget_get_accessible (toggle), title);
     g_object_set_data_full (G_OBJECT (row), DIRECTORY_KEY, g_strdup (uri), g_free);
-    g_object_set_data_full (G_OBJECT (row), PROJECT_NAME_KEY, g_utf8_casefold (title, -1), g_free);
-    g_object_set_data (G_OBJECT (row), PROJECT_TOGGLE_KEY, toggle);
-    g_object_set_data (G_OBJECT (row), PROJECT_COUNT_KEY, count);
-    g_object_set_data (G_OBJECT (toggle), "project-expander", icon);
-    update_project_expander (toggle, GTK_IMAGE (icon),
-                             g_hash_table_contains (get_sidebar (list)->collapsed, uri));
-    g_signal_connect (toggle, "clicked", G_CALLBACK (toggle_project), row);
-    gtk_box_pack_start (GTK_BOX (heading), icon, FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (heading), folder, FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (heading), label, TRUE, TRUE, 0);
-    gtk_container_add (GTK_CONTAINER (toggle), heading);
-    gtk_box_pack_start (GTK_BOX (box), toggle, TRUE, TRUE, 0);
-    gtk_box_pack_start (GTK_BOX (split_icon), plus, FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (split_icon), panes, FALSE, FALSE, 0);
-    gtk_widget_show_all (split_icon);
-    split = new_button_with_image (split_icon, _("New split terminal tab in this project"));
-    g_object_set_data (G_OBJECT (split), "split-tab", GINT_TO_POINTER (TRUE));
-    g_signal_connect (button, "clicked", G_CALLBACK (open_project_terminal), row);
-    g_signal_connect (split, "clicked", G_CALLBACK (open_project_terminal), row);
-    gtk_style_context_add_class (gtk_widget_get_style_context (count), "dim-label");
-    gtk_widget_set_margin_start (count, 4);
-    gtk_widget_set_tooltip_text (count, _("Open tabs"));
-    gtk_box_pack_start (GTK_BOX (box), count, FALSE, FALSE, 0);
-    gtk_box_pack_end (GTK_BOX (box), menu, FALSE, FALSE, 0);
-    gtk_box_pack_end (GTK_BOX (box), split, FALSE, FALSE, 0);
-    gtk_box_pack_end (GTK_BOX (box), button, FALSE, FALSE, 0);
-  } else {
-    label = new_label (_("Other Terminals"));
-    gtk_widget_set_margin_bottom (label, 6);
-    gtk_box_pack_start (GTK_BOX (box), label, TRUE, TRUE, 0);
   }
+  else
+    title = _("Default Project");
+
+  GtkWidget *toggle = gtk_button_new ();
+  GtkWidget *heading = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+  GtkWidget *icon = gtk_image_new ();
+
+  const char *heading_text = display_path != NULL ? display_path : title;
+  GtkWidget *label = new_label (heading_text);
+  gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_START);
+  gtk_button_set_relief (GTK_BUTTON (toggle), GTK_RELIEF_NONE);
+  gtk_widget_set_tooltip_text (toggle, detail != NULL ? detail : display_path);
+  atk_object_set_name (gtk_widget_get_accessible (toggle), heading_text);
+  g_object_set_data_full (G_OBJECT (row), PROJECT_NAME_KEY,
+                          g_utf8_casefold (remote ? display_path : title, -1), g_free);
+  g_object_set_data (G_OBJECT (row), PROJECT_TOGGLE_KEY, toggle);
+  g_object_set_data (G_OBJECT (toggle), "project-expander", icon);
+  update_project_expander (toggle, GTK_IMAGE (icon),
+                           g_hash_table_contains (get_sidebar (list)->collapsed,
+                                                  project_id (GTK_LIST_BOX_ROW (row))));
+  g_signal_connect (toggle, "clicked", G_CALLBACK (toggle_project), row);
+  gtk_box_pack_end (GTK_BOX (heading), icon, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (heading), label, TRUE, TRUE, 0);
+  gtk_container_add (GTK_CONTAINER (toggle), heading);
+  gtk_box_pack_start (GTK_BOX (box), toggle, TRUE, TRUE, 0);
+  gtk_box_pack_end (GTK_BOX (box),
+                    new_project_menu (GTK_LIST_BOX_ROW (row), remote, can_move_up, can_move_down),
+                    FALSE, FALSE, 0);
 
   pango_attr_list_insert (attrs, pango_attr_weight_new (PANGO_WEIGHT_BOLD));
   gtk_label_set_attributes (GTK_LABEL (label), attrs);
@@ -667,48 +693,48 @@ rename_tab (TerminalWindow *window,
 }
 
 static void
-rename_tab_clicked (GtkButton *button,
-                    GtkListBoxRow *row)
+rename_tab_menu_activate (GtkMenuItem *item,
+                          GtkListBoxRow *row)
 {
   rename_tab (get_sidebar (get_row_list (row))->window,
               g_object_get_data (G_OBJECT (row), SCREEN_KEY));
 }
 
 static void
-close_terminal (GtkButton *button,
-                GtkListBox *list)
+close_terminal (GtkMenuItem *item,
+                GtkListBoxRow *row)
 {
-  TerminalScreen *screen = g_object_get_data (G_OBJECT (button), SCREEN_KEY);
+  TerminalScreen *screen = g_object_get_data (G_OBJECT (row), SCREEN_KEY);
 
-  g_signal_emit_by_name (get_sidebar (list)->container, "screen-close-request", screen);
+  g_signal_emit_by_name (get_sidebar (get_row_list (row))->container, "screen-close-request", screen);
 }
 
 static GtkWidget *
-new_terminal_row (GtkListBox *list,
-                  TerminalScreen *screen,
+new_terminal_row (TerminalScreen *screen,
                   GtkListBoxRow *project)
 {
   GtkWidget *row = gtk_list_box_row_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   GtkWidget *label = new_label (NULL);
-  GtkWidget *rename = new_icon_button ("document-edit-symbolic", _("Rename Tab"));
-  GtkWidget *button = new_icon_button ("window-close-symbolic", _("Close tab"));
+  GtkWidget *menu = gtk_menu_new ();
+  GtkWidget *rename = gtk_menu_item_new_with_label (_("Rename Tab…"));
+  GtkWidget *close = gtk_menu_item_new_with_label (_("Close Tab"));
 
-  gtk_widget_set_margin_start (box, project != NULL ? PROJECT_TERMINAL_INDENT : 20);
+  gtk_widget_set_margin_start (box, PROJECT_TERMINAL_INDENT);
   gtk_widget_set_margin_end (box, 4);
+  gtk_style_context_add_class (gtk_widget_get_style_context (label), "project-terminal-title");
   gtk_container_add (GTK_CONTAINER (row), box);
   gtk_box_pack_start (GTK_BOX (box), label, TRUE, TRUE, 0);
-  gtk_box_pack_end (GTK_BOX (box), button, FALSE, FALSE, 0);
-  gtk_box_pack_end (GTK_BOX (box), rename, FALSE, FALSE, 0);
 
   sync_title (screen, NULL, GTK_LABEL (label));
   g_signal_connect_object (screen, "notify::title", G_CALLBACK (sync_title), label, 0);
   g_object_set_data (G_OBJECT (row), SCREEN_KEY, screen);
-  if (project != NULL)
-    g_object_set_data_full (G_OBJECT (row), PROJECT_ROW_KEY, g_object_ref (project), g_object_unref);
-  g_signal_connect (rename, "clicked", G_CALLBACK (rename_tab_clicked), row);
-  g_object_set_data (G_OBJECT (button), SCREEN_KEY, screen);
-  g_signal_connect (button, "clicked", G_CALLBACK (close_terminal), list);
+  g_object_set_data_full (G_OBJECT (row), PROJECT_ROW_KEY, g_object_ref (project), g_object_unref);
+  g_signal_connect_object (rename, "activate", G_CALLBACK (rename_tab_menu_activate), row, 0);
+  g_signal_connect_object (close, "activate", G_CALLBACK (close_terminal), row, 0);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), rename);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), close);
+  gtk_box_pack_end (GTK_BOX (box), new_options_button (menu, _("Tab options")), FALSE, FALSE, 0);
   return row;
 }
 
@@ -754,11 +780,13 @@ rebuild_rows (GtkListBox *list)
   gs_free_list GList *screens = terminal_mdi_container_list_tab_screens (sidebar->container);
   GList *l;
   char **project;
-  gboolean has_other = FALSE;
+  GtkWidget *default_row = new_group_row (list, NULL, NULL, FALSE, FALSE);
+  GtkListBoxRow *default_tail = GTK_LIST_BOX_ROW (default_row);
 
   sidebar->active_project = NULL;
   sidebar->search_target = NULL;
   gtk_container_foreach (GTK_CONTAINER (list), (GtkCallback) gtk_widget_destroy, NULL);
+  gtk_list_box_insert (list, default_row, -1);
   for (project = projects; *project != NULL; project++) {
     GtkWidget *row = new_group_row (list, *project, remote_projects, project != projects, project[1] != NULL);
     gtk_list_box_insert (list, row, -1);
@@ -795,33 +823,15 @@ rebuild_rows (GtkListBox *list)
       }
     }
 
-    GtkListBoxRow *group = tail != NULL ? get_project_row (tail) : NULL;
-    GtkWidget *row = new_terminal_row (list, screen, group);
+    GtkWidget *row = new_terminal_row (screen, get_project_row (tail != NULL ? tail : default_tail));
     if (tail != NULL) {
       gtk_list_box_insert (list, row, gtk_list_box_row_get_index (tail) + 1);
       g_hash_table_insert (tails, directory, row);
       directory = NULL;
     } else {
-      if (!has_other) {
-        gtk_list_box_insert (list, new_group_row (list, NULL, NULL, FALSE, FALSE), -1);
-        has_other = TRUE;
-      }
-      gtk_list_box_insert (list, row, -1);
+      gtk_list_box_insert (list, row, gtk_list_box_row_get_index (default_tail) + 1);
+      default_tail = GTK_LIST_BOX_ROW (row);
     }
-  }
-
-  GHashTableIter iter;
-  gpointer value;
-  g_hash_table_iter_init (&iter, tails);
-  while (g_hash_table_iter_next (&iter, NULL, &value)) {
-    GtkListBoxRow *tail = value;
-    GtkListBoxRow *group = get_project_row (tail);
-    GtkLabel *count = g_object_get_data (G_OBJECT (group), PROJECT_COUNT_KEY);
-    int n_tabs = gtk_list_box_row_get_index (tail) - gtk_list_box_row_get_index (group);
-    char text[32];
-
-    g_snprintf (text, sizeof text, "%d", n_tabs);
-    gtk_label_set_text (count, text);
   }
 
   gtk_widget_show_all (GTK_WIDGET (list));
@@ -1067,7 +1077,7 @@ action_switch_project_tab (GSimpleAction *action,
     activate_terminal (list, target, NULL);
 }
 
-static gboolean
+static ProjectUpdate
 update_project_directory (GtkListBox *list,
                           const char *old_uri,
                           const char *uri,
@@ -1081,16 +1091,13 @@ update_project_directory (GtkListBox *list,
   guint n;
 
   if (old_uri != NULL && g_strcmp0 (old_uri, uri) == 0)
-    return TRUE;
+    return PROJECT_UPDATE_OK;
 
   for (n = 0; projects[n] != NULL; n++) {
     if (g_strcmp0 (projects[n], old_uri) == 0)
       index = n;
-    if (g_strcmp0 (projects[n], uri) == 0) {
-      if (old_uri != NULL)
-        show_error (sidebar->window, _("This directory is already a project"), NULL);
-      return old_uri == NULL;
-    }
+    if (g_strcmp0 (projects[n], uri) == 0)
+      return PROJECT_UPDATE_DUPLICATE;
   }
 
   if (old_uri == NULL) {
@@ -1098,7 +1105,7 @@ update_project_directory (GtkListBox *list,
     projects[n] = g_strdup (uri);
     projects[n + 1] = NULL;
   } else if (index < 0) {
-    return TRUE;
+    return PROJECT_UPDATE_OK;
   } else {
     old_project = projects[index];
     if (uri != NULL)
@@ -1113,7 +1120,7 @@ update_project_directory (GtkListBox *list,
     : save_project_directories (sidebar, projects);
   if (saved && old_project != NULL)
     set_project_collapsed (sidebar, old_project, FALSE);
-  return saved;
+  return saved ? PROJECT_UPDATE_OK : PROJECT_UPDATE_FAILED;
 }
 
 static void
@@ -1126,8 +1133,16 @@ choose_directory_response (GtkDialog *dialog,
 
     if (directory != NULL) {
       gs_free char *uri = g_file_get_uri (directory);
-      update_project_directory (list, g_object_get_data (G_OBJECT (dialog), DIRECTORY_KEY),
-                                uri, NULL);
+      const char *old_uri = g_object_get_data (G_OBJECT (dialog), DIRECTORY_KEY);
+      ProjectSidebar *sidebar = get_sidebar (list);
+      ProjectUpdate result = update_project_directory (list, old_uri, uri, NULL);
+      if (result == PROJECT_UPDATE_DUPLICATE) {
+        show_error (sidebar->window, _("This directory is already a project"), NULL);
+      } else if (result == PROJECT_UPDATE_OK && old_uri == NULL) {
+        gs_free char *path = g_file_get_path (directory);
+        if (path != NULL)
+          show_bookmark_status (sidebar, path);
+      }
     }
   }
   gtk_widget_destroy (GTK_WIDGET (dialog));
@@ -1159,13 +1174,14 @@ choose_directory (GtkListBox *list,
 }
 
 static void
-add_directory (GtkButton *button,
+add_directory (GtkMenuItem *item,
                GtkListBox *list)
 {
+  gtk_widget_hide (get_sidebar (list)->bookmark_notice);
   choose_directory (list, NULL);
 }
 
-static gboolean
+static ProjectUpdate
 add_remote_project (GtkListBox *list,
                     const SshProject *ssh,
                     const char *path)
@@ -1179,7 +1195,7 @@ add_remote_project (GtkListBox *list,
   if (argv == NULL) {
     show_error (sidebar->window, _("Could not save the remote project"),
                 error != NULL ? error->message : NULL);
-    return FALSE;
+    return PROJECT_UPDATE_FAILED;
   }
 
   g_assert (uri != NULL);
@@ -1193,13 +1209,14 @@ choose_remote_directory_response (GtkDialog *dialog,
 {
   if (response == GTK_RESPONSE_ACCEPT) {
     GtkEntry *entry = g_object_get_data (G_OBJECT (dialog), "remote-directory-entry");
+    GtkLabel *status = g_object_get_data (G_OBJECT (dialog), "remote-directory-status");
     GVariant *connection = g_object_get_data (G_OBJECT (dialog), "remote-project-ssh");
     const char *path = gtk_entry_get_text (entry);
     SshProject ssh;
 
     if (path[0] != '/') {
-      show_error (get_sidebar (list)->window, _("Enter an absolute remote directory"),
-                  _("The directory must start with a slash (/)."));
+      gtk_label_set_text (status, _("Enter an absolute directory starting with a slash (/)."));
+      gtk_widget_show (GTK_WIDGET (status));
       return;
     }
 
@@ -1208,18 +1225,33 @@ choose_remote_directory_response (GtkDialog *dialog,
       ssh.credential = NULL;
     if (*ssh.login_command == '\0')
       ssh.login_command = NULL;
-    if (!add_remote_project (list, &ssh, path))
+    ProjectUpdate result = add_remote_project (list, &ssh, path);
+    if (result == PROJECT_UPDATE_DUPLICATE) {
+      gtk_label_set_text (status, _("This directory is already a project. Enter a different directory."));
+      gtk_widget_show (GTK_WIDGET (status));
+      gtk_widget_grab_focus (GTK_WIDGET (entry));
+      gtk_editable_select_region (GTK_EDITABLE (entry), 0, -1);
       return;
+    }
+    if (result == PROJECT_UPDATE_FAILED)
+      return;
+    show_bookmark_status (get_sidebar (list), path);
   }
   gtk_widget_destroy (GTK_WIDGET (dialog));
 }
 
 static void
 choose_remote_directory (GtkListBox *list,
-                         const SshProject *ssh,
-                         const char *startup_path)
+                         const SshProject *ssh)
 {
   ProjectSidebar *sidebar = get_sidebar (list);
+
+  if (ssh->command == NULL || *ssh->command == '\0') {
+    show_error (sidebar->window, _("Could not save the remote project"),
+                _("The SSH connection details are unavailable."));
+    return;
+  }
+
   GtkWidget *dialog = gtk_dialog_new_with_buttons (_("Add Remote Directory"),
                                                    GTK_WINDOW (sidebar->window),
                                                    GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -1227,25 +1259,31 @@ choose_remote_directory (GtkListBox *list,
                                                    _("_Add"), GTK_RESPONSE_ACCEPT, NULL);
   GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  gs_free char *text = g_strdup_printf (_("The remote shell has not reported its current directory.\nSSH command: %s"),
-                                       ssh->command);
+  gs_free char *text = g_strdup_printf (_("SSH command: %s"), ssh->command);
   GtkWidget *description = gtk_label_new (text);
   GtkWidget *label = gtk_label_new_with_mnemonic (_("_Absolute directory:"));
   GtkWidget *entry = gtk_entry_new ();
+  GtkWidget *status = gtk_label_new (NULL);
 
   gtk_container_set_border_width (GTK_CONTAINER (box), 12);
   align_label_start (description);
   gtk_label_set_line_wrap (GTK_LABEL (description), TRUE);
+  gtk_label_set_line_wrap_mode (GTK_LABEL (description), PANGO_WRAP_WORD_CHAR);
+  gtk_label_set_max_width_chars (GTK_LABEL (description), 52);
   align_label_start (label);
   gtk_label_set_mnemonic_widget (GTK_LABEL (label), entry);
   gtk_entry_set_activates_default (GTK_ENTRY (entry), TRUE);
-  if (startup_path != NULL && g_utf8_validate (startup_path, -1, NULL))
-    gtk_entry_set_text (GTK_ENTRY (entry), startup_path);
+  align_label_start (status);
+  gtk_label_set_line_wrap (GTK_LABEL (status), TRUE);
+  gtk_label_set_max_width_chars (GTK_LABEL (status), 52);
+  gtk_widget_set_no_show_all (status, TRUE);
   gtk_box_pack_start (GTK_BOX (box), description, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (box), label, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (box), entry, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (box), status, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (content), box, TRUE, TRUE, 0);
   g_object_set_data (G_OBJECT (dialog), "remote-directory-entry", entry);
+  g_object_set_data (G_OBJECT (dialog), "remote-directory-status", status);
   g_object_set_data_full (G_OBJECT (dialog), "remote-project-ssh",
                           g_variant_ref_sink (g_variant_new ("(sss)", ssh->command,
                                                             ssh->credential != NULL ? ssh->credential : "",
@@ -1259,35 +1297,28 @@ choose_remote_directory (GtkListBox *list,
 }
 
 static void
-add_current_remote_directory (GtkListBox *list,
-                              TerminalScreen *screen)
-{
-  SshProject ssh;
-  ssh.command = terminal_screen_get_startup_ssh (screen, &ssh.credential);
-  ssh.login_command = terminal_screen_get_ssh_login_command (screen);
-  if (ssh.command == NULL || *ssh.command == '\0') {
-    show_error (get_sidebar (list)->window, _("Could not save the remote project"),
-                _("The SSH connection details are unavailable."));
-    return;
-  }
-
-  gs_free char *path = terminal_screen_dup_remote_directory (screen);
-  if (path != NULL && path[0] == '/')
-    add_remote_project (list, &ssh, path);
-  else
-    choose_remote_directory (list, &ssh, terminal_screen_get_startup_ssh_directory (screen));
-}
-
-static void
-add_current_directory (GtkButton *button,
+add_current_directory (GtkMenuItem *item,
                        GtkListBox *list)
 {
   ProjectSidebar *sidebar = get_sidebar (list);
   TerminalScreen *screen = terminal_mdi_container_get_active_screen (sidebar->container);
 
-  if (screen != NULL && terminal_screen_has_remote_session (screen)) {
-    add_current_remote_directory (list, screen);
-    return;
+  gtk_widget_hide (sidebar->bookmark_notice);
+
+  if (screen != NULL) {
+    gs_free char *command = terminal_screen_dup_foreground_ssh (screen);
+    if (command != NULL) {
+      SshProject ssh = { .command = command };
+      choose_remote_directory (list, &ssh);
+      return;
+    }
+    if (terminal_screen_has_remote_session (screen)) {
+      SshProject ssh;
+      ssh.command = terminal_screen_get_startup_ssh (screen, &ssh.credential);
+      ssh.login_command = terminal_screen_get_ssh_login_command (screen);
+      choose_remote_directory (list, &ssh);
+      return;
+    }
   }
 
   gs_free char *path = screen != NULL ? terminal_screen_get_current_dir (screen) : NULL;
@@ -1299,7 +1330,14 @@ add_current_directory (GtkButton *button,
 
   gs_unref_object GFile *directory = g_file_new_for_path (path);
   gs_free char *uri = g_file_get_uri (directory);
-  update_project_directory (list, NULL, uri, NULL);
+  ProjectUpdate result = update_project_directory (list, NULL, uri, NULL);
+  if (result == PROJECT_UPDATE_OK)
+    show_bookmark_status (sidebar, path);
+  else if (result == PROJECT_UPDATE_DUPLICATE) {
+    gs_free char *display_path = g_filename_display_name (path);
+    show_project_message (sidebar->window, GTK_MESSAGE_INFO,
+                          _("This directory is already a project"), display_path);
+  }
 }
 
 static gboolean
@@ -1322,19 +1360,24 @@ terminal_project_sidebar_new (TerminalWindow *window,
     { "project-tab-switch", action_switch_project_tab, "b", NULL, NULL }
   };
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
   GtkWidget *search = gtk_search_entry_new ();
   GtkWidget *scroll = gtk_scrolled_window_new (NULL, NULL);
   GtkWidget *list = gtk_list_box_new ();
   GtkWidget *empty = gtk_label_new (_("No matching projects"));
-  GtkWidget *footer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-  GtkWidget *add = gtk_button_new_with_mnemonic (_("_Add Working Directory…"));
-  GtkWidget *pin = new_icon_button ("bookmark-new-symbolic", _("Add Current Directory"));
+  GtkWidget *bookmark_notice = gtk_info_bar_new ();
+  GtkWidget *bookmark_status = gtk_label_new (NULL);
+  GtkWidget *menu = gtk_menu_new ();
+  GtkWidget *add = gtk_menu_item_new_with_mnemonic (_("_Add Working Directory…"));
+  GtkWidget *pin = gtk_menu_item_new_with_label (_("Add Current Directory"));
   ProjectSidebar *sidebar = g_new0 (ProjectSidebar, 1);
 
   sidebar->window = window;
   sidebar->container = container;
   sidebar->settings = terminal_app_get_global_settings (terminal_app_get ());
   sidebar->search = search;
+  sidebar->bookmark_notice = bookmark_notice;
+  sidebar->bookmark_status = bookmark_status;
   sidebar->scroll = GTK_SCROLLED_WINDOW (scroll);
   sidebar->collapsed = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
   g_object_set_data_full (G_OBJECT (list), "terminal-project-sidebar", sidebar, free_sidebar);
@@ -1344,10 +1387,14 @@ terminal_project_sidebar_new (TerminalWindow *window,
   gtk_widget_set_size_request (column, 200, -1);
   gtk_entry_set_placeholder_text (GTK_ENTRY (search), _("Search projects"));
   atk_object_set_name (gtk_widget_get_accessible (search), _("Search projects"));
-  gtk_widget_set_margin_start (search, 6);
-  gtk_widget_set_margin_end (search, 6);
-  gtk_widget_set_margin_top (search, 6);
-  gtk_widget_set_margin_bottom (search, 6);
+  gtk_widget_set_margin_start (header, 6);
+  gtk_widget_set_margin_end (header, 6);
+  gtk_widget_set_margin_top (header, 6);
+  gtk_widget_set_margin_bottom (header, 6);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), add);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), pin);
+  gtk_box_pack_start (GTK_BOX (header), search, TRUE, TRUE, 0);
+  gtk_box_pack_end (GTK_BOX (header), new_options_button (menu, _("Sidebar options")), FALSE, FALSE, 0);
   gtk_label_set_line_wrap (GTK_LABEL (empty), TRUE);
   gtk_widget_set_margin_start (empty, 12);
   gtk_widget_set_margin_end (empty, 12);
@@ -1358,15 +1405,18 @@ terminal_project_sidebar_new (TerminalWindow *window,
   gtk_style_context_add_class (gtk_widget_get_style_context (list), "sidebar");
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_container_add (GTK_CONTAINER (scroll), list);
-  gtk_widget_set_margin_start (footer, 6);
-  gtk_widget_set_margin_end (footer, 6);
-  gtk_widget_set_margin_top (footer, 6);
-  gtk_widget_set_margin_bottom (footer, 6);
-  gtk_box_pack_start (GTK_BOX (footer), add, TRUE, TRUE, 0);
-  gtk_box_pack_end (GTK_BOX (footer), pin, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (column), search, FALSE, FALSE, 0);
+  align_label_start (bookmark_status);
+  gtk_label_set_line_wrap (GTK_LABEL (bookmark_status), TRUE);
+  gtk_label_set_line_wrap_mode (GTK_LABEL (bookmark_status), PANGO_WRAP_WORD_CHAR);
+  gtk_label_set_max_width_chars (GTK_LABEL (bookmark_status), 22);
+  gtk_container_add (GTK_CONTAINER (gtk_info_bar_get_content_area (GTK_INFO_BAR (bookmark_notice))),
+                     bookmark_status);
+  gtk_widget_show_all (bookmark_notice);
+  gtk_widget_hide (bookmark_notice);
+  gtk_widget_set_no_show_all (bookmark_notice, TRUE);
+  gtk_box_pack_start (GTK_BOX (column), header, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (column), scroll, TRUE, TRUE, 0);
-  gtk_box_pack_end (GTK_BOX (column), footer, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (column), bookmark_notice, FALSE, FALSE, 0);
   gtk_widget_show_all (column);
   gtk_widget_set_no_show_all (column, TRUE);
   g_object_bind_property_full (container, "tab-pos", column, "visible", G_BINDING_SYNC_CREATE,
@@ -1389,8 +1439,8 @@ terminal_project_sidebar_new (TerminalWindow *window,
   g_signal_connect_object (search, "key-press-event", G_CALLBACK (search_key_pressed), list, 0);
   g_signal_connect_object (search, "focus-out-event", G_CALLBACK (search_focus_out), list, 0);
   g_signal_connect_object (search, "activate", G_CALLBACK (search_activate), list, 0);
-  g_signal_connect_object (add, "clicked", G_CALLBACK (add_directory), list, 0);
-  g_signal_connect_object (pin, "clicked", G_CALLBACK (add_current_directory), list, 0);
+  g_signal_connect_object (add, "activate", G_CALLBACK (add_directory), list, 0);
+  g_signal_connect_object (pin, "activate", G_CALLBACK (add_current_directory), list, 0);
   update_collapsed_projects (GTK_LIST_BOX (list));
   rebuild_rows (GTK_LIST_BOX (list));
   return column;

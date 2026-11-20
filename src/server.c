@@ -134,8 +134,6 @@ init_server (int argc,
   if (g_getenv ("G_ENABLE_DIAGNOSTIC") == NULL)
     g_setenv ("G_ENABLE_DIAGNOSTIC", "0", TRUE);
 
-  _terminal_debug_init ();
-
   /* Change directory to $HOME so we don't prevent unmounting, e.g. if the
    * factory is started by nautilus-open-terminal. See bug #565328.
    * On failure back to /.
@@ -159,7 +157,7 @@ init_server (int argc,
   }
 
   if (!increase_rlimit_nofile ()) {
-    g_printerr ("Failed to increase RLIMIT_NOFILE: %m\n");
+    g_warning ("Failed to increase RLIMIT_NOFILE: %m");
   }
 
   /* Now we can create the app */
@@ -178,6 +176,8 @@ int
 main (int argc,
       char *argv[])
 {
+  _terminal_debug_init ();
+
   gs_unref_object GApplication *app = NULL;
   int r = init_server (argc, argv, &app);
   if (r != 0)

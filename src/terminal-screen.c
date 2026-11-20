@@ -904,6 +904,12 @@ terminal_screen_get_title (TerminalScreen *screen)
   return vte_terminal_get_window_title (VTE_TERMINAL (screen));
 }
 
+const char *
+terminal_screen_get_custom_title (TerminalScreen *screen)
+{
+  return screen->priv->custom_title;
+}
+
 void
 terminal_screen_set_custom_title (TerminalScreen *screen,
                                   const char *title)
@@ -1827,13 +1833,79 @@ terminal_screen_get_initial_directory (TerminalScreen *screen)
   return screen->priv->initial_working_directory;
 }
 
+#ifdef __linux__
+static int
+get_pty_foreground_pid (TerminalScreen *screen)
+{
+  VtePty *pty = vte_terminal_get_pty (VTE_TERMINAL (screen));
+
+  return pty != NULL ? tcgetpgrp (vte_pty_get_fd (pty)) : -1;
+}
+
+static int
+get_foreground_ssh_pid (TerminalScreen *screen)
+{
+  int pid = get_pty_foreground_pid (screen);
+  if (pid <= 0 || pid == screen->priv->child_pid)
+    return -1;
+
+  char filename[64];
+  g_snprintf (filename, sizeof filename, "/proc/%d/exe", pid);
+  gs_free char *executable = g_file_read_link (filename, NULL);
+  return executable != NULL && g_str_has_suffix (executable, "/ssh") ? pid : -1;
+}
+#endif
+
+char *
+terminal_screen_dup_foreground_ssh (TerminalScreen *screen)
+{
+#ifdef __linux__
+  int pid = get_foreground_ssh_pid (screen);
+  if (pid <= 0)
+    return NULL;
+
+  char filename[64];
+  gs_free char *argv = NULL;
+  gsize length;
+  g_snprintf (filename, sizeof filename, "/proc/%d/cmdline", pid);
+  if (!g_file_get_contents (filename, &argv, &length, NULL) ||
+      length == 0 || argv[length - 1] != '\0' || pid != get_pty_foreground_pid (screen))
+    return NULL;
+
+  /* Preserve argument boundaries when the saved command is parsed on reopen. */
+  GString *command = g_string_new ("ssh");
+  for (const char *arg = argv + strlen (argv) + 1; arg < argv + length; arg += strlen (arg) + 1) {
+    if (!g_utf8_validate (arg, -1, NULL)) {
+      g_string_free (command, TRUE);
+      return NULL;
+    }
+    g_string_append_c (command, ' ');
+    if (*arg != '\0' &&
+        arg[strspn (arg, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./@%+=,:-")] == '\0') {
+      g_string_append (command, arg);
+    } else {
+      gs_free char *quoted = g_shell_quote (arg);
+      g_string_append (command, quoted);
+    }
+  }
+
+  return g_string_free (command, FALSE);
+#else
+  return NULL;
+#endif
+}
+
 static void
 terminal_screen_current_directory_changed (TerminalScreen *screen,
                                            gpointer user_data)
 {
   TerminalScreenPrivate *priv = screen->priv;
 
-  priv->directory_uri_is_remote = priv->child_uses_ssh;
+  gboolean remote = priv->child_uses_ssh;
+#ifdef __linux__
+  remote = remote || get_foreground_ssh_pid (screen) > 0;
+#endif
+  priv->directory_uri_is_remote = remote;
 
   /* Only a new OSC 7 report from the managed child's lifetime is remote.
    * VTE retains the previous child's URI; the hostname alone proves nothing. */
@@ -1890,9 +1962,8 @@ terminal_screen_get_current_dir (TerminalScreen *screen)
   }
 
 #ifdef __linux__
-  VtePty *pty = vte_terminal_get_pty (VTE_TERMINAL (screen));
+  int foreground = get_pty_foreground_pid (screen);
   int child = screen->priv->child_pid;
-  int foreground = pty != NULL ? tcgetpgrp (vte_pty_get_fd (pty)) : -1;
   char filename[64];
 
   if (foreground > 0 && foreground != child) {

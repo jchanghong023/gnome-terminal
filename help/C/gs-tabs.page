@@ -36,6 +36,13 @@
   resize the sidebar. Only changes you make to the divider are saved for
   new windows.</p>
 
+  <p>Each project row shows its full saved directory path when space allows.
+  If the path does not fit, the sidebar truncates it from the beginning.
+  Hover over the path to see it in full.</p>
+
+  <p><gui>Default Project</gui> is always available and opens ordinary
+  terminals with the default profile, without a saved directory or SSH connection.</p>
+
   <p>When the sidebar is visible, type a project name in <gui>Search projects</gui>,
   or focus the field with <keyseq><key>Ctrl</key><key>Shift</key><key>P</key></keyseq>.
   Use <key>Up</key> or <key>Down</key> to select a result and
@@ -44,18 +51,23 @@
   to clear the search and return focus to the terminal. Searching never
   opens a new tab or changes which projects are collapsed.</p>
 
-  <p>Use <gui>Add Working Directory…</gui> to choose a project directory,
-  or click <gui>Add Current Directory</gui> next to it to save the active
-  terminal's current directory. In a terminal connected through
-  <gui>SSH on Reopen</gui>, this saves a remote project. If the remote
-  shell has not reported its directory, enter the absolute path when
-  prompted. Neither action opens a tab.
-  Each project has two add buttons. <gui>New terminal in this project</gui>
-  opens a single terminal. <gui>New split terminal tab in this project</gui>
-  (the plus with a split icon) opens two independent terminals side by side,
-  each taking half the available width. Both start in the project's
-  directory and share one sidebar row.</p>
-  <p>For a remote project, either button reconnects over SSH and opens the
+  <p>Open the three-dot <gui>Sidebar options</gui> menu next to the search
+  field. Use <gui>Add Working Directory…</gui> to choose a project directory
+  or <gui>Add Current Directory</gui> to save the active terminal's current
+  directory. This also works after running <cmd>ssh</cmd>
+  and changing directories in an interactive SSH session, or when connected
+  through <gui>SSH on Reopen</gui>. For SSH, enter the absolute remote path
+  and click <gui>Add</gui>. If that directory is already a project, the
+  dialog stays open so you can enter another path.
+  After adding a project, the sidebar confirms the directory below the project
+  list. If the local directory is already a project, a dialog shows its full
+  path. Neither action opens a tab.</p>
+  <p>Open the three-dot <gui>Project options</gui> menu on a project row.
+  <gui>New terminal in this project</gui> opens a single terminal.
+  <gui>New split terminal tab in this project</gui> opens two independent
+  terminals side by side. Both start in the project's directory, or in your
+  home directory for the default project, and share one sidebar row.</p>
+  <p>For a remote project, either menu item reconnects over SSH and opens the
   bookmarked directory. <gui>SSH on Reopen</gui> also lets you specify a
   starting directory and an optional command to run after SSH login.</p>
 
@@ -79,9 +91,9 @@
 
   <p>Tabs are grouped under the most specific saved project that contains
   their starting directory. Changing directory inside a terminal does
-  not move its tab. Click a project name to collapse or expand its tabs.
-  The highlighted project contains the active terminal, even when collapsed.
-  The number next to each project counts its open tabs.</p>
+  not move its tab. Tab titles are indented under their project.
+  Click a project path to collapse or expand its tabs.
+  The highlighted project contains the active terminal, even when collapsed.</p>
 
   <p>To cycle through tabs in the active tab's project, use
   <keyseq><key>Alt</key><key>Page Up</key></keyseq> or
@@ -104,11 +116,13 @@
   <section id="rename-tab">
     <title>Rename a tab</title>
 
-    <p>Click the <gui>Rename Tab</gui> button next to a tab in the sidebar,
+    <p>Choose <gui>Rename Tab…</gui> from the three-dot <gui>Tab options</gui>
+    menu next to a tab in the sidebar,
     or choose <guiseq><gui style="menu">Terminal</gui>
     <gui style="menuitem">Rename Tab…</gui></guiseq> for the active tab.
     Enter a name and click <gui>Rename</gui>. Leave the field blank to
-    restore the title supplied by the terminal.</p>
+    restore the title supplied by the terminal. Custom names are kept when
+    the session is restored.</p>
   </section>
 
   <section id="close-tab">
@@ -125,8 +139,10 @@
       </item>
     </steps>
 
-    <p>You can also click the close button next to the terminal title in the
-    sidebar.</p>
+    <p>You can also choose <gui>Close Tab</gui> from <gui>Tab options</gui>
+    next to the terminal title in the sidebar. Closing the last tab also
+    closes the window and requires
+    confirmation.</p>
 
   </section>
 

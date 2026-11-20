@@ -62,28 +62,6 @@ terminal_fprintf (FILE* fp,
   }
 }
 
-#if GLIB_CHECK_VERSION (2, 50, 0)
-
-/* Need to install a special log writer so we never output
- * anything without the '# ' prepended, in case --print-environment
- * is used.
- */
-GLogWriterOutput
-terminal_log_writer (GLogLevelFlags log_level,
-                     const GLogField *fields,
-                     gsize n_fields,
-                     gpointer user_data)
-{
-  for (gsize i = 0; i < n_fields; i++) {
-    if (g_str_equal (fields[i].key, "MESSAGE"))
-      terminal_printerr ("%s\n", (const char*)fields[i].value);
-  }
-
-  return G_LOG_WRITER_HANDLED;
-}
-
-#endif /* GLIB 2.50 */
-
 static GOptionContext *get_goption_context (TerminalOptions *options);
 
 static TerminalSettingsList *
@@ -279,9 +257,8 @@ ensure_top_tab (TerminalOptions *options)
 static void
 deprecated_option_warning (const gchar *option_name)
 {
-  terminal_printerr (_("Option “%s” is deprecated and might be removed in a later version of gnome-terminal."),
-                     option_name);
-  terminal_printerr ("\n");
+  g_warning (_("Option “%s” is deprecated and might be removed in a later version of gnome-terminal."),
+             option_name);
 }
 
 static void
@@ -290,8 +267,7 @@ deprecated_command_option_warning (const char *option_name)
   deprecated_option_warning (option_name);
 
   /* %s is being replaced with "-- " (without quotes), which must be used literally, not translatable */
-  terminal_printerr (_("Use “%s” to terminate the options and put the command line to execute after it."), "-- ");
-  terminal_printerr ("\n");
+  g_warning (_("Use “%s” to terminate the options and put the command line to execute after it."), "-- ");
 }
 
 static gboolean
@@ -300,9 +276,7 @@ unsupported_option_callback (const gchar *option_name,
                              gpointer     data,
                              GError     **error)
 {
-  terminal_printerr (_("Option “%s” is no longer supported in this version of gnome-terminal."),
-              option_name);
-  terminal_printerr ("\n");
+  g_warning (_("Option “%s” is no longer supported in this version of gnome-terminal."), option_name);
   return TRUE; /* we do not want to bail out here but continue */
 }
 
@@ -421,8 +395,7 @@ option_profile_cb (const gchar *option_name,
                                                      value, error);
   if (profile == NULL)
   {
-      terminal_printerr ("Profile '%s' specified but not found. Attempting to fall back "
-                         "to the default profile.\n", value);
+      g_warning ("Profile '%s' specified but not found. Falling back to the default profile.", value);
       g_clear_error (error);
       profile = terminal_profiles_list_dup_uuid_or_name (terminal_options_ensure_profiles_list (options),
                                                          NULL, error);
@@ -492,8 +465,7 @@ option_window_callback (const gchar *option_name,
                                                        value, error);
 
     if (value && profile == NULL) {
-      terminal_printerr ("Profile '%s' specified but not found. Attempting to fall back "
-                         "to the default profile.\n", value);
+      g_warning ("Profile '%s' specified but not found. Falling back to the default profile.", value);
       g_clear_error (error);
       profile = terminal_profiles_list_dup_uuid_or_name (terminal_options_ensure_profiles_list (options),
                                                          NULL, error);
@@ -579,8 +551,7 @@ option_show_menubar_callback (const gchar *option_name,
       iw = g_list_last (options->initial_windows)->data;
       if (iw->force_menubar_state && iw->menubar_state == TRUE)
         {
-          terminal_printerr_detail (_("“%s” option given twice for the same window\n"),
-                                    "--show-menubar");
+          g_warning (_("“%s” option given twice for the same window"), "--show-menubar");
 
           return TRUE;
         }
@@ -612,8 +583,7 @@ option_hide_menubar_callback (const gchar *option_name,
 
       if (iw->force_menubar_state && iw->menubar_state == FALSE)
         {
-          terminal_printerr_detail (_("“%s” option given twice for the same window\n"),
-                                    "--hide-menubar");
+          g_warning (_("“%s” option given twice for the same window"), "--hide-menubar");
           return TRUE;
         }
 
@@ -1076,7 +1046,7 @@ terminal_options_parse (int *argcp,
     options->startup_id = terminal_client_get_fallback_startup_id ();
   /* Still NULL? */
   if (options->startup_id == NULL)
-    terminal_printerr_detail ("Warning: DESKTOP_STARTUP_ID not set and no fallback available.\n");
+    g_debug ("DESKTOP_STARTUP_ID not set and no fallback available.");
 
   GdkDisplay *display = gdk_display_get_default ();
   if (display != NULL)

@@ -87,6 +87,7 @@ G_BEGIN_DECLS
 #define TERMINAL_SETTING_SESSION_KEY                    "terminal-session"
 #define TERMINAL_SETTING_SESSION_SSH_KEY                "terminal-session-ssh"
 #define TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY         "terminal-session-ssh-startup"
+#define TERMINAL_SETTING_SESSION_TITLES_KEY              "terminal-session-titles"
 
 #define TERMINAL_SETTINGS_LIST_LIST_KEY                 "list"
 #define TERMINAL_SETTINGS_LIST_DEFAULT_KEY              "default"

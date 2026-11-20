@@ -98,6 +98,8 @@ void terminal_screen_keep_startup_ssh (TerminalScreen *screen);
 gboolean terminal_screen_has_remote_session (TerminalScreen *screen);
 /* Latest OSC 7 directory for this managed SSH target; transfer full. */
 char *terminal_screen_dup_remote_directory (TerminalScreen *screen);
+/* Snapshot a manually started foreground SSH command; transfer full. */
+char *terminal_screen_dup_foreground_ssh (TerminalScreen *screen);
 const char *terminal_screen_get_startup_ssh_directory (TerminalScreen *screen);
 void terminal_screen_set_startup_ssh_directory (TerminalScreen *screen,
                                                 const char *directory);
@@ -126,6 +128,7 @@ void         terminal_screen_set_initial_environment (TerminalScreen  *screen,
 char **      terminal_screen_get_initial_environment (TerminalScreen  *screen);
 
 const char* terminal_screen_get_title          (TerminalScreen *screen);
+const char *terminal_screen_get_custom_title    (TerminalScreen *screen);
 void        terminal_screen_set_custom_title   (TerminalScreen *screen,
                                                 const char *title);
 const char* terminal_screen_get_icon_title     (TerminalScreen *screen);

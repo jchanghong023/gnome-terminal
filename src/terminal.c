@@ -520,17 +520,13 @@ main (int argc, char **argv)
 {
   int exit_code = EXIT_FAILURE;
 
-#if GLIB_CHECK_VERSION (2, 50, 0)
-  g_log_set_writer_func (terminal_log_writer, NULL, NULL);
-#endif
+  _terminal_debug_init ();
 
   g_set_prgname ("gnome-terminal");
 
   setlocale (LC_ALL, "");
 
   terminal_i18n_init (TRUE);
-
-  _terminal_debug_init ();
 
   gboolean plain_launch = argc == 1;
 

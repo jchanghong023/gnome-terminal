@@ -23,9 +23,39 @@
 
 TerminalDebugFlags _terminal_debug_flags;
 
+#define TERMINAL_LOG_ERRORS (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL)
+
+static void
+terminal_log_handler (const gchar *domain,
+                      GLogLevelFlags level,
+                      const gchar *message,
+                      gpointer user_data)
+{
+  if (level & TERMINAL_LOG_ERRORS)
+    g_log_default_handler (domain, level, message, user_data);
+}
+
+#if GLIB_CHECK_VERSION (2, 50, 0)
+static GLogWriterOutput
+terminal_log_writer (GLogLevelFlags level,
+                     const GLogField *fields,
+                     gsize n_fields,
+                     gpointer user_data)
+{
+  if (level & TERMINAL_LOG_ERRORS)
+    return g_log_writer_standard_streams (level, fields, n_fields, user_data);
+  return G_LOG_WRITER_HANDLED;
+}
+#endif
+
 void
 _terminal_debug_init(void)
 {
+  g_log_set_default_handler (terminal_log_handler, NULL);
+#if GLIB_CHECK_VERSION (2, 50, 0)
+  g_log_set_writer_func (terminal_log_writer, NULL, NULL);
+#endif
+
 #ifdef ENABLE_DEBUG
   const GDebugKey keys[] = {
     { "accels",        TERMINAL_DEBUG_ACCELS        },

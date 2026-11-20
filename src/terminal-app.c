@@ -983,10 +983,11 @@ terminal_app_save_session (TerminalApp *app,
     return;
 
   /* Store byte strings for paths; an empty second path denotes a single pane. */
-  GVariantBuilder builder, ssh_builder, ssh_startup_builder;
+  GVariantBuilder builder, ssh_builder, ssh_startup_builder, titles_builder;
   g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(ayay)"));
   g_variant_builder_init (&ssh_builder, G_VARIANT_TYPE ("a((ss)(ss))"));
   g_variant_builder_init (&ssh_startup_builder, G_VARIANT_TYPE ("a((ays)(ays))"));
+  g_variant_builder_init (&titles_builder, G_VARIANT_TYPE_STRING_ARRAY);
   for (GList *l = tabs; l != NULL; l = l->next) {
     TerminalScreen *screen = l->data;
     TerminalScreen *peer = terminal_notebook_get_peer (screen);
@@ -996,6 +997,8 @@ terminal_app_save_session (TerminalApp *app,
                           peer_directory != NULL ? peer_directory : "");
     append_session_ssh (&ssh_builder, screen, peer);
     append_session_ssh_startup (&ssh_startup_builder, screen, peer);
+    const char *title = terminal_screen_get_custom_title (screen);
+    g_variant_builder_add (&titles_builder, "s", title != NULL ? title : "");
   }
 
   guint selected = MAX (0, terminal_mdi_container_get_active_screen_num (container));
@@ -1007,7 +1010,9 @@ terminal_app_save_session (TerminalApp *app,
                                              g_variant_builder_end (&ssh_builder));
   gboolean saved_ssh_startup = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY,
                                                      g_variant_builder_end (&ssh_startup_builder));
-  if (!saved_tabs || !saved_ssh || !saved_ssh_startup) {
+  gboolean saved_titles = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_TITLES_KEY,
+                                                g_variant_builder_end (&titles_builder));
+  if (!saved_tabs || !saved_ssh || !saved_ssh_startup || !saved_titles) {
     g_settings_revert (settings);
     return;
   }
@@ -1079,21 +1084,24 @@ terminal_app_restore_session (TerminalApp *app,
 
   gs_unref_variant GVariant *ssh_config = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
   gs_unref_variant GVariant *ssh_startup = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY);
+  gs_unref_variant GVariant *titles = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_TITLES_KEY);
 
   gs_unref_object GSettings *profile = terminal_settings_list_ref_default_child (app->profiles_list);
   TerminalWindow *window = terminal_app_new_window (app, 0);
   if (startup_id != NULL)
     gtk_window_set_startup_id (GTK_WINDOW (window), startup_id);
 
-  GVariantIter iter, ssh_iter, ssh_startup_iter;
+  GVariantIter iter, ssh_iter, ssh_startup_iter, title_iter;
   const char *directory, *peer_directory;
   TerminalScreen *active = NULL;
   guint index = 0;
   g_variant_iter_init (&iter, tabs);
   g_variant_iter_init (&ssh_iter, ssh_config);
   g_variant_iter_init (&ssh_startup_iter, ssh_startup);
+  g_variant_iter_init (&title_iter, titles);
   gsize ssh_count = g_variant_iter_n_children (&ssh_iter);
   gsize ssh_startup_count = g_variant_iter_n_children (&ssh_startup_iter);
+  gsize title_count = g_variant_iter_n_children (&title_iter);
   while (g_variant_iter_next (&iter, "(^&ay^&ay)", &directory, &peer_directory)) {
     const char *command = NULL, *credential = NULL;
     const char *peer_command = NULL, *peer_credential = NULL;
@@ -1110,6 +1118,9 @@ terminal_app_restore_session (TerminalApp *app,
     TerminalScreen *peer = *peer_directory != '\0' ?
       new_session_screen (profile, peer_directory, child_env, peer_command, peer_credential,
                           peer_ssh_directory, peer_login_command) : NULL;
+    const char *title;
+    if (index < title_count && g_variant_iter_next (&title_iter, "&s", &title))
+      terminal_screen_set_custom_title (screen, title);
     add_session_screens (window, screen, peer);
     if (active == NULL || index == selected)
       active = screen;
@@ -1123,6 +1134,7 @@ terminal_app_restore_session (TerminalApp *app,
   g_settings_reset (settings, TERMINAL_SETTING_SESSION_KEY);
   g_settings_reset (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
   g_settings_reset (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY);
+  g_settings_reset (settings, TERMINAL_SETTING_SESSION_TITLES_KEY);
   g_settings_apply (settings);
   return TRUE;
 }

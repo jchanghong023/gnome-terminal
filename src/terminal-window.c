@@ -3420,6 +3420,7 @@ confirm_close_window_or_tab (TerminalWindow *window,
 {
   TerminalWindowPrivate *priv = window->priv;
   GtkWidget *dialog;
+  gboolean last_tab = screen != NULL && terminal_mdi_container_get_n_screens (priv->mdi_container) == 1;
   gboolean do_confirm;
   int n_tabs;
   gboolean split_tab = FALSE;
@@ -3431,16 +3432,16 @@ confirm_close_window_or_tab (TerminalWindow *window,
                            GTK_RESPONSE_DELETE_EVENT);
     }
 
-  do_confirm = g_settings_get_boolean (terminal_app_get_global_settings (terminal_app_get ()),
-                                       TERMINAL_SETTING_CONFIRM_CLOSE_KEY);
-  if (!do_confirm)
+  if (!last_tab &&
+      !g_settings_get_boolean (terminal_app_get_global_settings (terminal_app_get ()),
+                               TERMINAL_SETTING_CONFIRM_CLOSE_KEY))
     return FALSE;
 
   if (screen)
     {
       TerminalScreen *peer = terminal_notebook_get_peer (screen);
       split_tab = peer != NULL;
-      do_confirm = terminal_screen_has_foreground_process (screen, NULL, NULL) ||
+      do_confirm = last_tab || terminal_screen_has_foreground_process (screen, NULL, NULL) ||
                    (peer && terminal_screen_has_foreground_process (peer, NULL, NULL));
       n_tabs = 1;
     }
@@ -3476,10 +3477,14 @@ confirm_close_window_or_tab (TerminalWindow *window,
                             GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
                             GTK_MESSAGE_WARNING,
                             GTK_BUTTONS_CANCEL,
-                            "%s", n_tabs > 1 ? _("Close this window?") :
+                            "%s", last_tab ? _("Close the last tab?") :
+                                  n_tabs > 1 ? _("Close this window?") :
                                   split_tab ? _("Close both terminals?") : _("Close this terminal?"));
 
-  if (n_tabs > 1)
+  if (last_tab)
+    gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
+                                              "%s", _("This will also close the window and end any commands running in the tab."));
+  else if (n_tabs > 1)
     gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
                                               "%s", _("There are still processes running in some terminals in this window. "
                                                       "Closing the window will kill all of them."));
@@ -3494,9 +3499,10 @@ confirm_close_window_or_tab (TerminalWindow *window,
 
   gtk_window_set_title (GTK_WINDOW (dialog), ""); 
 
-  gtk_dialog_add_button (GTK_DIALOG (dialog), n_tabs > 1 ? _("C_lose Window") :
+  gtk_dialog_add_button (GTK_DIALOG (dialog), last_tab ? _("C_lose Tab") :
+                         n_tabs > 1 ? _("C_lose Window") :
                          split_tab ? _("C_lose Both Terminals") : _("C_lose Terminal"), GTK_RESPONSE_ACCEPT);
-  gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
+  gtk_dialog_set_default_response (GTK_DIALOG (dialog), last_tab ? GTK_RESPONSE_CANCEL : GTK_RESPONSE_ACCEPT);
 
   gtk_dialog_set_alternative_button_order (GTK_DIALOG (dialog),
                                            GTK_RESPONSE_ACCEPT,

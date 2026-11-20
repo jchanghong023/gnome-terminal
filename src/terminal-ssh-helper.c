@@ -19,6 +19,7 @@
 #include <gtk/gtk.h>
 #include <uuid.h>
 
+#include "terminal-debug.h"
 #include "terminal-i18n.h"
 
 #define SSH_PID_ENV "GNOME_TERMINAL_ASKPASS_PID"
@@ -306,6 +307,8 @@ connect_ssh (int argc, char **argv)
 int
 main (int argc, char **argv)
 {
+  _terminal_debug_init ();
+
   setlocale (LC_ALL, "");
   terminal_i18n_init (TRUE);
 

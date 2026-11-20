@@ -49,11 +49,10 @@ exported environment variables also carry over. Do not include secrets in
 this command. Use a plain SSH connection command (for example,
 `ssh -p 2222 user@host`), without a trailing remote command, for either field.
 
-Add Current Directory in a managed SSH pane creates a remote project. If no
-OSC 7 directory has been reported, enter the absolute path when asked. The
-project's new-tab and split buttons reuse its SSH connection and run the
-saved login command, if set. Removing the project does not remove the
-original pane's password.
+Add Current Directory in Sidebar options asks for the absolute path when
+the active pane is using SSH. The project's new-tab and split actions in
+Project options reuse its SSH connection and run the saved login command,
+if set. Removing the project does not remove the original pane's password.
 
 For Bash on the remote host, the system VTE profile script can report
 directories when it is installed and enabled. On tcsh, if you want automatic
