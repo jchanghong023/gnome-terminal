@@ -634,11 +634,11 @@ set_proxy_env (GHashTable *env_table,
   if (!value)
     return;
 
-  if (g_hash_table_lookup (env_table, key) == NULL)
+  if (!g_hash_table_contains (env_table, key))
     key1 = g_strdup (key);
 
   key2 = g_ascii_strup (key, -1);
-  if (g_hash_table_lookup (env_table, key) != NULL)
+  if (g_hash_table_contains (env_table, key2))
     {
       g_free (key2);
       key2 = NULL;
@@ -754,19 +754,12 @@ setup_ignore_proxy_env (GSettings *proxy_settings,
   set_proxy_env (env_table, "no_proxy", g_string_free (buf, FALSE));
 }
 
-/**
- * terminal_util_add_proxy_env:
- * @env_table: a #GHashTable
- *
- * Adds the proxy env variables to @env_table.
- */
-void
-terminal_util_add_proxy_env (GHashTable *env_table)
+static void
+add_settings_proxy_env (GSettings  *proxy_settings,
+                        GHashTable *env_table)
 {
-  GSettings *proxy_settings;
   GDesktopProxyMode mode;
 
-  proxy_settings = terminal_app_get_proxy_settings (terminal_app_get ());
   mode = g_settings_get_enum (proxy_settings, "mode");
 
   if (mode == G_DESKTOP_PROXY_MODE_MANUAL)
@@ -783,6 +776,59 @@ terminal_util_add_proxy_env (GHashTable *env_table)
     {
       setup_autoconfig_proxy_env (proxy_settings, env_table);
     }
+}
+
+char **
+terminal_util_get_host_proxy_environment (void)
+{
+  char **env = g_get_environ ();
+  GSettingsSchemaSource *source = g_settings_schema_source_get_default ();
+  if (source == NULL)
+    return env;
+
+  gs_unref_settings_schema GSettingsSchema *schema =
+    g_settings_schema_source_lookup (source, "org.gnome.system.proxy", TRUE);
+  if (schema == NULL)
+    return env;
+
+  gs_unref_object GSettings *settings = g_settings_new_full (schema, NULL, NULL);
+  gs_unref_hashtable GHashTable *defaults =
+    g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  add_settings_proxy_env (settings, defaults);
+
+  GHashTableIter iter;
+  gpointer key, value;
+  g_hash_table_iter_init (&iter, defaults);
+  while (g_hash_table_iter_next (&iter, &key, &value))
+    env = g_environ_setenv (env, key, value, FALSE);
+  return env;
+}
+
+/**
+ * terminal_util_add_proxy_env:
+ * @env_table: a #GHashTable
+ *
+ * Fills in missing proxy variables for a child process.
+ */
+void
+terminal_util_add_proxy_env (GHashTable *env_table)
+{
+  if (g_getenv (TERMINAL_PORTABLE_ENV_ROOT) == NULL) {
+    add_settings_proxy_env (terminal_app_get_proxy_settings (terminal_app_get ()), env_table);
+    return;
+  }
+
+  /* The launcher already merged the host desktop settings into the process
+   * environment. Use them even when a pane has no client environment. */
+  static const char *const names[] = {
+    "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY",
+    "ftp_proxy", "FTP_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY",
+  };
+  for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+    const char *value = g_getenv (names[i]);
+    if (value != NULL && !g_hash_table_contains (env_table, names[i]))
+      g_hash_table_insert (env_table, g_strdup (names[i]), g_strdup (value));
+  }
 }
 
 /**

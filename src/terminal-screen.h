@@ -94,9 +94,18 @@ void terminal_screen_set_startup_ssh (TerminalScreen *screen,
                                       const char *credential);
 void terminal_screen_keep_startup_ssh (TerminalScreen *screen);
 
-/* Includes configured reopen intent and panes displaying a managed SSH child. */
+/* Managed SSH launch details; also available while its exited child is held. */
+const char *terminal_screen_get_ssh_launch (TerminalScreen *screen,
+                                           const char **directory);
+/* Running SSH credentials and login command; borrowed outputs are optional. */
+const char *terminal_screen_get_active_ssh (TerminalScreen *screen,
+                                           const char **credential,
+                                           const char **login_command);
+/* Forget both the configured and active credentials without changing startup settings. */
+gboolean terminal_screen_forget_ssh_password (TerminalScreen *screen);
+/* Managed or foreground unmanaged SSH; excludes future reopen settings. */
 gboolean terminal_screen_has_remote_session (TerminalScreen *screen);
-/* Latest OSC 7 directory for this managed SSH target; transfer full. */
+/* Latest OSC 7 directory eligible for SSH on Reopen; transfer full. */
 char *terminal_screen_dup_remote_directory (TerminalScreen *screen);
 /* Snapshot a manually started foreground SSH command; transfer full. */
 char *terminal_screen_dup_foreground_ssh (TerminalScreen *screen);

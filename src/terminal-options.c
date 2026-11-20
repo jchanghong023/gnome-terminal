@@ -257,8 +257,8 @@ ensure_top_tab (TerminalOptions *options)
 static void
 deprecated_option_warning (const gchar *option_name)
 {
-  g_warning (_("Option “%s” is deprecated and might be removed in a later version of gnome-terminal."),
-             option_name);
+  terminal_printerr (_("Option “%s” is deprecated and might be removed in a later version of gnome-terminal."),
+                     option_name);
 }
 
 static void
@@ -267,7 +267,7 @@ deprecated_command_option_warning (const char *option_name)
   deprecated_option_warning (option_name);
 
   /* %s is being replaced with "-- " (without quotes), which must be used literally, not translatable */
-  g_warning (_("Use “%s” to terminate the options and put the command line to execute after it."), "-- ");
+  terminal_printerr (_("Use “%s” to terminate the options and put the command line to execute after it."), "-- ");
 }
 
 static gboolean
@@ -276,7 +276,7 @@ unsupported_option_callback (const gchar *option_name,
                              gpointer     data,
                              GError     **error)
 {
-  g_warning (_("Option “%s” is no longer supported in this version of gnome-terminal."), option_name);
+  terminal_printerr (_("Option “%s” is no longer supported in this version of gnome-terminal."), option_name);
   return TRUE; /* we do not want to bail out here but continue */
 }
 
@@ -290,6 +290,24 @@ unsupported_option_fatal_callback (const gchar *option_name,
                _("Option “%s” is no longer supported in this version of gnome-terminal."),
                option_name);
   return FALSE;
+}
+
+static gboolean
+option_print_environment_cb (const gchar *option_name,
+                             const gchar *value,
+                             gpointer     data,
+                             GError     **error)
+{
+  TerminalOptions *options = data;
+
+  if (g_getenv (TERMINAL_PORTABLE_ENV_ROOT) != NULL) {
+    g_set_error_literal (error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
+                         _("--print-environment is not supported with the portable terminal's private D-Bus session"));
+    return FALSE;
+  }
+
+  options->print_environment = TRUE;
+  return TRUE;
 }
 
 
@@ -395,7 +413,7 @@ option_profile_cb (const gchar *option_name,
                                                      value, error);
   if (profile == NULL)
   {
-      g_warning ("Profile '%s' specified but not found. Falling back to the default profile.", value);
+      terminal_printerr ("Profile '%s' specified but not found. Falling back to the default profile.", value);
       g_clear_error (error);
       profile = terminal_profiles_list_dup_uuid_or_name (terminal_options_ensure_profiles_list (options),
                                                          NULL, error);
@@ -465,7 +483,7 @@ option_window_callback (const gchar *option_name,
                                                        value, error);
 
     if (value && profile == NULL) {
-      g_warning ("Profile '%s' specified but not found. Falling back to the default profile.", value);
+      terminal_printerr ("Profile '%s' specified but not found. Falling back to the default profile.", value);
       g_clear_error (error);
       profile = terminal_profiles_list_dup_uuid_or_name (terminal_options_ensure_profiles_list (options),
                                                          NULL, error);
@@ -551,7 +569,7 @@ option_show_menubar_callback (const gchar *option_name,
       iw = g_list_last (options->initial_windows)->data;
       if (iw->force_menubar_state && iw->menubar_state == TRUE)
         {
-          g_warning (_("“%s” option given twice for the same window"), "--show-menubar");
+          terminal_printerr (_("“%s” option given twice for the same window"), "--show-menubar");
 
           return TRUE;
         }
@@ -583,7 +601,7 @@ option_hide_menubar_callback (const gchar *option_name,
 
       if (iw->force_menubar_state && iw->menubar_state == FALSE)
         {
-          g_warning (_("“%s” option given twice for the same window"), "--hide-menubar");
+          terminal_printerr (_("“%s” option given twice for the same window"), "--hide-menubar");
           return TRUE;
         }
 
@@ -953,6 +971,7 @@ terminal_options_parse (int *argcp,
   gboolean retval;
   int i;
   char **argv = *argvp;
+  const char *deprecated_execute_option = NULL;
 
   options = g_new0 (TerminalOptions, 1);
 
@@ -1012,7 +1031,7 @@ terminal_options_parse (int *argcp,
         continue;
 
       if (is_execute)
-        deprecated_command_option_warning (argv[i]);
+        deprecated_execute_option = argv[i];
 
       options->execute = is_execute;
 
@@ -1035,6 +1054,8 @@ terminal_options_parse (int *argcp,
   context = get_goption_context (options);
   retval = g_option_context_parse (context, argcp, argvp, error);
   g_option_context_free (context);
+  if (deprecated_execute_option != NULL)
+    deprecated_command_option_warning (deprecated_execute_option);
 
   if (!retval) {
     terminal_options_free (options);
@@ -1301,9 +1322,9 @@ get_goption_context (TerminalOptions *options)
     {
       "print-environment",
       'p',
-      0,
-      G_OPTION_ARG_NONE,
-      &options->print_environment,
+      G_OPTION_FLAG_NO_ARG,
+      G_OPTION_ARG_CALLBACK,
+      option_print_environment_cb,
       N_("Print environment variables to interact with the terminal"),
       NULL
     },

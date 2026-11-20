@@ -31,6 +31,8 @@ the command and sign in manually.
 The session stores the command and a password file reference. Passwords are
 stored as plain text in ~/.gnome-terminal-ssh/ (directory mode 0700, new files
 mode 0600). Passwords previously saved to a keyring must be entered again.
+Replacing a saved session removes password files used only by the old
+snapshot.
 Do not put passwords in the command itself. Autofill only applies to standard
 SSH password authentication, not interactive challenges or jump hosts. An
 unknown host key requires confirmation; a changed host key blocks the connection.
@@ -38,9 +40,10 @@ unknown host key requires confirmation; a changed host key blocks the connection
 Set Remote Directory to an absolute path on the SSH host, or leave it blank
 to use the remote home on first connection. When the remote shell reports
 its working directory via OSC 7, closing the window remembers the last
-reported directory. Without OSC 7, Terminal can only use the configured
-directory; it cannot read the remote working directory from the local SSH
-process.
+reported directory. Explicitly changing or clearing Remote Directory
+overrides earlier reports; a later directory change can be tracked again.
+Without OSC 7, Terminal can only use the configured directory; it cannot
+read the remote working directory from the local SSH process.
 
 Command after Login runs once on the SSH host, after the directory change
 and before opening the interactive login shell. It uses the remote account's
@@ -50,9 +53,12 @@ this command. Use a plain SSH connection command (for example,
 `ssh -p 2222 user@host`), without a trailing remote command, for either field.
 
 Add Current Directory in Sidebar options asks for the absolute path when
-the active pane is using SSH. The project's new-tab and split actions in
-Project options reuse its SSH connection and run the saved login command,
-if set. Removing the project does not remove the original pane's password.
+the active pane is using SSH. The bookmark uses the connection that is
+running, even if SSH on Reopen has been changed. The project's new-tab
+and split actions connect to its bookmarked directory and then run the
+saved login command, if set. They report a failed directory change rather
+than opening the remote home directory. Removing the project does not
+remove the original pane's password.
 
 For Bash on the remote host, the system VTE profile script can report
 directories when it is installed and enabled. On tcsh, if you want automatic
@@ -90,10 +96,12 @@ gdbus and gio) and dbus-run-session, but no installation or FUSE. Launch it with
 
 It extracts to a temporary directory and starts the bundled Terminal on a
 private session bus, with preferences stored in the separate
-gnome_terminal_portable dconf database. Shells, commands and URI handlers
-use the launching desktop's session bus and settings instead. Terminal
-keeps its own dark theme without overriding the user's GTK_THEME for
-other applications.
+gnome_terminal_portable dconf database. Shells and commands inherit the
+launching desktop's environment, including any proxy settings not
+explicitly overridden. URI handlers use the host session bus and settings.
+Terminal keeps its own dark theme without overriding the user's GTK_THEME
+for other applications. The portable launcher rejects --print-environment:
+its private D-Bus identifiers are not usable from the host session.
 
 The launcher extracts to /dev/shm by default, or to TMPDIR if set.
 For remote X11 sessions with an inaccessible or missing XDG_RUNTIME_DIR,

@@ -49,6 +49,7 @@ EXTRA_DIST = 			\
 	ChangeLog.pre-2-23	\
 	ChangeLog.README	\
 	HACKING			\
+	build-portable.sh	\
 	$(NULL)
 
 CLEANFILES = \

@@ -54,11 +54,12 @@
   <p>Open the three-dot <gui>Sidebar options</gui> menu next to the search
   field. Use <gui>Add Working Directory…</gui> to choose a project directory
   or <gui>Add Current Directory</gui> to save the active terminal's current
-  directory. This also works after running <cmd>ssh</cmd>
-  and changing directories in an interactive SSH session, or when connected
-  through <gui>SSH on Reopen</gui>. For SSH, enter the absolute remote path
-  and click <gui>Add</gui>. If that directory is already a project, the
-  dialog stays open so you can enter another path.
+  directory. This also works when running <cmd>ssh</cmd> directly, from an
+  interactive shell, or through <gui>SSH on Reopen</gui>. The bookmark uses
+  the active connection, not changes to the next reconnect. For SSH, enter
+  the absolute remote path and click <gui>Add</gui>. Equivalent paths or
+  SSH command quoting do not create another bookmark; the dialog stays
+  open so you can enter another path.
   After adding a project, the sidebar confirms the directory below the project
   list. If the local directory is already a project, a dialog shows its full
   path. Neither action opens a tab.</p>
@@ -68,8 +69,9 @@
   terminals side by side. Both start in the project's directory, or in your
   home directory for the default project, and share one sidebar row.</p>
   <p>For a remote project, either menu item reconnects over SSH and opens the
-  bookmarked directory. <gui>SSH on Reopen</gui> also lets you specify a
-  starting directory and an optional command to run after SSH login.</p>
+  bookmarked directory, or reports an error if that directory is unavailable.
+  <gui>SSH on Reopen</gui> also lets you specify a starting directory and an
+  optional command to run after SSH login.</p>
 
   <p>In a split tab, click either pane to direct typing and terminal
   shortcuts to it. Closing the tab closes both terminals. If one shell
@@ -98,7 +100,8 @@
   <p>To cycle through tabs in the active tab's project, use
   <keyseq><key>Alt</key><key>Page Up</key></keyseq> or
   <keyseq><key>Alt</key><key>Page Down</key></keyseq>.
-  These shortcuts can be changed in <gui>Preferences</gui>.</p>
+  With no other tab in the active project, the shortcut goes to the
+  terminal instead. These shortcuts can be changed in <gui>Preferences</gui>.</p>
 
   <section id="add-tab">
     <title>Open a new tab</title>

@@ -102,7 +102,10 @@ struct _TerminalScreenPrivate
   char *startup_ssh_directory;
   char *ssh_login_command;
   char *reported_ssh_directory;
-  gboolean child_uses_ssh;
+  char *active_ssh_command;
+  char *active_ssh_credential;
+  char *active_ssh_directory;
+  char *active_ssh_login_command;
   gboolean track_ssh_directory;
   gboolean directory_uri_is_remote;
   gboolean keep_startup_ssh;
@@ -166,6 +169,10 @@ static void terminal_screen_icon_title_changed        (VteTerminal *vte_terminal
                                                        TerminalScreen *screen);
 static void terminal_screen_current_directory_changed (TerminalScreen *screen,
                                                        gpointer user_data);
+static void clear_active_ssh (TerminalScreenPrivate *priv);
+#ifdef __linux__
+static int get_foreground_ssh_pid (TerminalScreen *screen);
+#endif
 
 static void update_color_scheme                      (TerminalScreen *screen);
 
@@ -633,6 +640,7 @@ terminal_screen_dispose (GObject *object)
     priv->registered = FALSE;
   }
 
+  clear_active_ssh (priv);
   if (!priv->keep_startup_ssh && priv->startup_ssh_credential != NULL) {
     terminal_ssh_forget_password (priv->startup_ssh_credential);
     g_clear_pointer (&priv->startup_ssh_credential, g_free);
@@ -773,23 +781,30 @@ terminal_screen_set_startup_ssh (TerminalScreen *screen,
                                  const char *credential)
 {
   TerminalScreenPrivate *priv = screen->priv;
-  char *new_command = command != NULL && *command != '\0' ? g_strdup (command) : NULL;
+  char *new_command = terminal_ssh_canonicalize_command (command);
+  if (new_command == NULL && command != NULL && *command != '\0')
+    new_command = g_strdup (command);
   char *new_credential = new_command != NULL && credential != NULL && *credential != '\0' ?
                          g_strdup (credential) : NULL;
   gboolean command_changed = g_strcmp0 (priv->startup_ssh_command, new_command) != 0;
 
   g_free (priv->startup_ssh_command);
+  if (g_strcmp0 (priv->startup_ssh_credential, new_credential) != 0) {
+    if (priv->startup_ssh_credential != NULL &&
+        g_strcmp0 (priv->startup_ssh_credential, priv->active_ssh_credential) != 0 &&
+        !priv->keep_startup_ssh)
+      terminal_ssh_forget_password (priv->startup_ssh_credential);
+    priv->keep_startup_ssh = FALSE;
+  }
   g_free (priv->startup_ssh_credential);
   priv->startup_ssh_command = new_command;
   priv->startup_ssh_credential = new_credential;
 
   if (command_changed) {
     /* Directory and login command belong to the old SSH target. */
-    priv->track_ssh_directory = FALSE;
     g_clear_pointer (&priv->reported_ssh_directory, g_free);
     g_clear_pointer (&priv->startup_ssh_directory, g_free);
     g_clear_pointer (&priv->ssh_login_command, g_free);
-    g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
   }
 }
 
@@ -799,12 +814,77 @@ terminal_screen_keep_startup_ssh (TerminalScreen *screen)
   screen->priv->keep_startup_ssh = TRUE;
 }
 
+static void
+release_active_ssh_credential (TerminalScreenPrivate *priv)
+{
+  if (priv->active_ssh_credential != NULL &&
+      g_strcmp0 (priv->active_ssh_credential, priv->startup_ssh_credential) != 0)
+    terminal_ssh_forget_password (priv->active_ssh_credential);
+  g_clear_pointer (&priv->active_ssh_credential, g_free);
+}
+
+static void
+clear_active_ssh (TerminalScreenPrivate *priv)
+{
+  release_active_ssh_credential (priv);
+  g_clear_pointer (&priv->active_ssh_command, g_free);
+  g_clear_pointer (&priv->active_ssh_directory, g_free);
+  g_clear_pointer (&priv->active_ssh_login_command, g_free);
+  priv->track_ssh_directory = FALSE;
+}
+
+const char *
+terminal_screen_get_active_ssh (TerminalScreen *screen,
+                                const char **credential,
+                                const char **login_command)
+{
+  TerminalScreenPrivate *priv = screen->priv;
+  gboolean running = priv->child_pid > 0;
+  if (credential != NULL)
+    *credential = running ? priv->active_ssh_credential : NULL;
+  if (login_command != NULL)
+    *login_command = running ? priv->active_ssh_login_command : NULL;
+  return running ? priv->active_ssh_command : NULL;
+}
+
+const char *
+terminal_screen_get_ssh_launch (TerminalScreen *screen,
+                                const char **directory)
+{
+  TerminalScreenPrivate *priv = screen->priv;
+  *directory = priv->active_ssh_directory;
+  return priv->active_ssh_command;
+}
+
+gboolean
+terminal_screen_forget_ssh_password (TerminalScreen *screen)
+{
+  TerminalScreenPrivate *priv = screen->priv;
+  if (priv->startup_ssh_credential != NULL) {
+    if (!terminal_ssh_remove_password (priv->startup_ssh_credential))
+      return FALSE;
+    if (g_strcmp0 (priv->startup_ssh_credential, priv->active_ssh_credential) == 0)
+      g_clear_pointer (&priv->active_ssh_credential, g_free);
+    g_clear_pointer (&priv->startup_ssh_credential, g_free);
+  }
+  if (priv->active_ssh_credential != NULL) {
+    if (!terminal_ssh_remove_password (priv->active_ssh_credential))
+      return FALSE;
+    g_clear_pointer (&priv->active_ssh_credential, g_free);
+  }
+  return TRUE;
+}
+
 gboolean
 terminal_screen_has_remote_session (TerminalScreen *screen)
 {
-  TerminalScreenPrivate *priv = screen->priv;
-
-  return priv->startup_ssh_command != NULL || priv->child_uses_ssh;
+  if (terminal_screen_get_active_ssh (screen, NULL, NULL) != NULL)
+    return TRUE;
+#ifdef __linux__
+  return get_foreground_ssh_pid (screen) > 0;
+#else
+  return FALSE;
+#endif
 }
 
 char *
@@ -827,12 +907,13 @@ terminal_screen_set_startup_ssh_directory (TerminalScreen *screen,
 
   if (directory != NULL && !g_path_is_absolute (directory))
     directory = NULL;
+  /* Even clearing an already empty configured path supersedes the last report.
+   * A later directory notification can establish a new report. */
+  g_clear_pointer (&priv->reported_ssh_directory, g_free);
   if (g_strcmp0 (priv->startup_ssh_directory, directory) == 0)
     return;
-
   g_free (priv->startup_ssh_directory);
   priv->startup_ssh_directory = g_strdup (directory);
-  g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
 }
 
 const char *
@@ -1262,6 +1343,7 @@ should_launch_ssh (TerminalScreenPrivate *priv)
 static gboolean
 get_child_command (TerminalScreen *screen,
                    const char     *shell_env,
+                   const char     *ssh_directory,
                    GSpawnFlags    *spawn_flags_p,
                    char         ***argv_p,
                    GError        **err)
@@ -1282,11 +1364,10 @@ get_child_command (TerminalScreen *screen,
     }
   else if (should_launch_ssh (priv))
     {
-      const char *directory = priv->reported_ssh_directory != NULL ?
-                              priv->reported_ssh_directory : priv->startup_ssh_directory;
       argv = terminal_ssh_build_argv (priv->startup_ssh_command,
                                      priv->startup_ssh_credential,
-                                     directory, priv->ssh_login_command, err);
+                                     ssh_directory, priv->ssh_login_command,
+                                     priv->project_launch, err);
       if (argv == NULL)
         return FALSE;
       priv->confirm_direct_child = TRUE;
@@ -1566,10 +1647,15 @@ spawn_result_cb (VteTerminal *terminal,
   priv->child_pid = pid;
 
   if (error) {
-    priv->track_ssh_directory = FALSE;
+    clear_active_ssh (priv);
     vte_terminal_set_pty (terminal, NULL);
     show_spawn_error (screen, error);
   }
+  gboolean remote = error == NULL && terminal_screen_has_remote_session (screen);
+  if (remote)
+    priv->directory_uri_is_remote = TRUE;
+  if (remote || GPOINTER_TO_INT (user_data))
+    g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
 }
 
 static gboolean
@@ -1614,13 +1700,24 @@ terminal_screen_do_exec (TerminalScreen *screen,
 
   env = get_child_environment (screen, working_dir, &shell);
 
-  if (!get_child_command (screen, shell, &spawn_flags, &argv, error)) {
+  gboolean launch_ssh = should_launch_ssh (priv);
+  const char *ssh_directory = priv->reported_ssh_directory != NULL ?
+                              priv->reported_ssh_directory : priv->startup_ssh_directory;
+  if (!get_child_command (screen, shell, ssh_directory, &spawn_flags, &argv, error)) {
     free_fd_setup_data (data);
     return FALSE;
   }
 
-  gboolean was_remote = terminal_screen_has_remote_session (screen);
-  priv->track_ssh_directory = priv->child_uses_ssh = should_launch_ssh (priv);
+  gboolean update_group = priv->active_ssh_command != NULL || launch_ssh;
+  clear_active_ssh (priv);
+  if (launch_ssh) {
+    priv->active_ssh_command = g_strdup (priv->startup_ssh_command);
+    priv->active_ssh_credential = g_strdup (priv->startup_ssh_credential);
+    priv->active_ssh_directory = g_strdup (ssh_directory);
+    priv->active_ssh_login_command = g_strdup (priv->ssh_login_command);
+    priv->track_ssh_directory = terminal_ssh_command_accepts_remote_startup (priv->active_ssh_command);
+    priv->directory_uri_is_remote = TRUE;
+  }
 
   vte_terminal_spawn_async (terminal,
                             pty_flags,
@@ -1633,10 +1730,7 @@ terminal_screen_do_exec (TerminalScreen *screen,
                             (GDestroyNotify) (data ? free_fd_setup_data : NULL),
                             SPAWN_TIMEOUT,
                             cancellable,
-                            spawn_result_cb, NULL);
-
-  if (was_remote != terminal_screen_has_remote_session (screen))
-    g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
+                            spawn_result_cb, GINT_TO_POINTER (update_group));
 
   return TRUE; /* can't report any more errors since they only occur async */
 }
@@ -1845,8 +1939,10 @@ get_pty_foreground_pid (TerminalScreen *screen)
 static int
 get_foreground_ssh_pid (TerminalScreen *screen)
 {
+  if (screen->priv->active_ssh_command != NULL)
+    return -1;
   int pid = get_pty_foreground_pid (screen);
-  if (pid <= 0 || pid == screen->priv->child_pid)
+  if (pid <= 0)
     return -1;
 
   char filename[64];
@@ -1865,31 +1961,26 @@ terminal_screen_dup_foreground_ssh (TerminalScreen *screen)
     return NULL;
 
   char filename[64];
-  gs_free char *argv = NULL;
+  gs_free char *cmdline = NULL;
   gsize length;
   g_snprintf (filename, sizeof filename, "/proc/%d/cmdline", pid);
-  if (!g_file_get_contents (filename, &argv, &length, NULL) ||
-      length == 0 || argv[length - 1] != '\0' || pid != get_pty_foreground_pid (screen))
+  if (!g_file_get_contents (filename, &cmdline, &length, NULL) ||
+      length == 0 || cmdline[length - 1] != '\0' || pid != get_foreground_ssh_pid (screen))
     return NULL;
 
-  /* Preserve argument boundaries when the saved command is parsed on reopen. */
-  GString *command = g_string_new ("ssh");
-  for (const char *arg = argv + strlen (argv) + 1; arg < argv + length; arg += strlen (arg) + 1) {
-    if (!g_utf8_validate (arg, -1, NULL)) {
-      g_string_free (command, TRUE);
-      return NULL;
-    }
-    g_string_append_c (command, ' ');
-    if (*arg != '\0' &&
-        arg[strspn (arg, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./@%+=,:-")] == '\0') {
-      g_string_append (command, arg);
-    } else {
-      gs_free char *quoted = g_shell_quote (arg);
-      g_string_append (command, quoted);
-    }
-  }
+  const char *end = cmdline + length;
+  gsize argc = 0;
+  for (const char *arg = cmdline; arg < end; arg += strlen (arg) + 1)
+    ++argc;
 
-  return g_string_free (command, FALSE);
+  gs_free char **argv = g_new (char *, argc + 1);
+  char *arg = cmdline;
+  for (gsize i = 0; i < argc; ++i) {
+    argv[i] = arg;
+    arg += strlen (arg) + 1;
+  }
+  argv[argc] = NULL;
+  return terminal_ssh_join_command (argv);
 #else
   return NULL;
 #endif
@@ -1901,15 +1992,17 @@ terminal_screen_current_directory_changed (TerminalScreen *screen,
 {
   TerminalScreenPrivate *priv = screen->priv;
 
-  gboolean remote = priv->child_uses_ssh;
-#ifdef __linux__
-  remote = remote || get_foreground_ssh_pid (screen) > 0;
-#endif
+  gboolean managed = priv->active_ssh_command != NULL;
+  gboolean remote = managed || terminal_screen_has_remote_session (screen);
+  gboolean changed = priv->directory_uri_is_remote != remote;
   priv->directory_uri_is_remote = remote;
+  if (!managed && changed)
+    g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
 
   /* Only a new OSC 7 report from the managed child's lifetime is remote.
    * VTE retains the previous child's URI; the hostname alone proves nothing. */
-  if (!priv->track_ssh_directory)
+  if (!priv->track_ssh_directory ||
+      g_strcmp0 (priv->active_ssh_command, priv->startup_ssh_command) != 0)
     return;
 
   const char *uri = vte_terminal_get_current_directory_uri (VTE_TERMINAL (screen));
@@ -1917,14 +2010,6 @@ terminal_screen_current_directory_changed (TerminalScreen *screen,
   if (path == NULL || !g_path_is_absolute (path) ||
       g_strcmp0 (priv->reported_ssh_directory, path) == 0)
     return;
-
-  /* Explicit remote commands can report OSC 7, but cannot be reopened with
-   * a generated directory change or used as remote project shells. */
-  if (priv->reported_ssh_directory == NULL &&
-      !terminal_ssh_command_accepts_remote_startup (priv->startup_ssh_command)) {
-    priv->track_ssh_directory = FALSE;
-    return;
-  }
 
   g_free (priv->reported_ssh_directory);
   priv->reported_ssh_directory = g_steal_pointer (&path);
@@ -1945,7 +2030,7 @@ terminal_screen_get_current_dir (TerminalScreen *screen)
 {
   const char *uri;
 
-  if (screen->priv->child_uses_ssh)
+  if (screen->priv->active_ssh_command != NULL || terminal_screen_has_remote_session (screen))
     return NULL;
 
   uri = !screen->priv->directory_uri_is_remote ?
@@ -2012,15 +2097,20 @@ terminal_screen_child_exited (VteTerminal *terminal,
                          "[screen %p] child process exited\n",
                          screen);
 
+  gboolean managed = priv->active_ssh_command != NULL;
   priv->child_pid = -1;
   priv->track_ssh_directory = FALSE;
+  release_active_ssh_credential (priv);
+  g_clear_pointer (&priv->active_ssh_login_command, g_free);
   if (gtk_widget_in_destruction (GTK_WIDGET (screen)))
     return;
+  if (!managed && priv->directory_uri_is_remote)
+    g_signal_emit (screen, signals[INITIAL_DIRECTORY_CHANGED], 0);
   
   action = g_settings_get_enum (priv->profile, TERMINAL_PROFILE_EXIT_ACTION_KEY);
 
   /* Keep failed SSH connections visible; never reconnect in an automatic loop. */
-  if (priv->child_uses_ssh)
+  if (managed)
     action = TERMINAL_EXIT_HOLD;
   /* Shell exit isn't a request to close the other shell in the same tab. */
   else if (action == TERMINAL_EXIT_CLOSE && terminal_notebook_get_peer (screen) != NULL)

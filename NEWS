@@ -1,3 +1,16 @@
+3.28.2-centos7.1
+================
+* Bookmark the active SSH connection, including directly launched OpenSSH,
+  independently of changes to its reconnect settings.
+* Honor edits to the reconnect directory, recognize equivalent remote
+  bookmarks, and report inaccessible project directories.
+* Remove saved passwords that are no longer referenced after replacing a
+  session.
+* Pass project navigation shortcuts through when there is no other tab in
+  the active project, and keep inactive split tabs from widening the window.
+* Preserve actionable portable-launch diagnostics and host proxy settings
+  without delaying exit for external link handlers.
+
 3.13.0
 ======
 * Work with new vte 2.91 API

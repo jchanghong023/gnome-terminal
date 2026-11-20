@@ -204,16 +204,19 @@ terminal_notebook_focus_screen (TerminalNotebook *notebook,
 }
 
 static void
-set_page_screens_visible (GtkWidget *page,
+set_page_content_visible (GtkWidget *page,
                           gboolean visible)
 {
   TerminalScreen *left = terminal_notebook_get_page_screen (page);
   TerminalScreen *right = split_right (page);
 
-  if (left)
+  if (right != NULL) {
+    /* Exclude the panes' scrollbars and info bars as well as the terminals. */
+    gtk_widget_set_visible (GTK_WIDGET (terminal_screen_container_get_from_screen (left)), visible);
+    gtk_widget_set_visible (GTK_WIDGET (terminal_screen_container_get_from_screen (right)), visible);
+  } else if (left != NULL) {
     gtk_widget_set_visible (GTK_WIDGET (left), visible);
-  if (right)
-    gtk_widget_set_visible (GTK_WIDGET (right), visible);
+  }
 }
 
 static void
@@ -223,6 +226,11 @@ insert_page (TerminalNotebook *notebook,
              int position)
 {
   GtkNotebook *gtk_notebook = GTK_NOTEBOOK (notebook);
+
+  /* GtkNotebook measures every visible page, not just the current one.
+   * Keep the new page selectable without measuring its inactive terminals. */
+  if (gtk_notebook_get_current_page (gtk_notebook) >= 0)
+    set_page_content_visible (page, FALSE);
 
   update_tab_visibility (notebook, +1);
   gtk_notebook_insert_page (gtk_notebook, page, tab_label, position);
@@ -438,12 +446,12 @@ terminal_notebook_switch_page (GtkNotebook     *gtk_notebook,
   TerminalScreen *screen = terminal_notebook_get_page_screen (child);
 
   priv->switching_page = TRUE;
-  set_page_screens_visible (child, TRUE);
+  set_page_content_visible (child, TRUE);
   GTK_NOTEBOOK_CLASS (terminal_notebook_parent_class)->switch_page (gtk_notebook, child, page_num);
 
-  /* Hidden terminals should not contribute to the notebook's size request. */
+  /* Inactive page content should not contribute to the notebook's size request. */
   if (old_page != child)
-    set_page_screens_visible (old_page, FALSE);
+    set_page_content_visible (old_page, FALSE);
 
   if (GTK_IS_WINDOW (toplevel)) {
     GtkWidget *focus = gtk_window_get_focus (GTK_WINDOW (toplevel));

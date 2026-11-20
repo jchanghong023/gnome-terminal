@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sysexits.h>
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -115,7 +116,7 @@ copy_password (const char *credential,
   gsize length;
   char *password = read_saved_password (credential, &length);
   if (password == NULL)
-    return EXIT_FAILURE;
+    return EX_NOINPUT;
   gboolean stored = write_password (destination, password, length);
   clear_password (password, length);
   g_free (password);

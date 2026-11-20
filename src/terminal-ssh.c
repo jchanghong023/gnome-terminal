@@ -4,6 +4,7 @@
 #include <glib/gi18n.h>
 #include <gtk/gtk.h>
 #include <string.h>
+#include <sysexits.h>
 #include <uuid.h>
 
 #include "terminal-defines.h"
@@ -71,6 +72,35 @@ terminal_ssh_command_accepts_remote_startup (const char *command)
          g_str_equal (argv[0], "ssh") && is_shell_connection (argv, argc);
 }
 
+char *
+terminal_ssh_join_command (char **argv)
+{
+  GString *command = g_string_new ("ssh");
+  for (char **arg = argv + 1; *arg != NULL; ++arg) {
+    if (!g_utf8_validate (*arg, -1, NULL)) {
+      g_string_free (command, TRUE);
+      return NULL;
+    }
+    g_string_append_c (command, ' ');
+    if (**arg != '\0' &&
+        (*arg)[strspn (*arg, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./@%+=,:-")] == '\0') {
+      g_string_append (command, *arg);
+    } else {
+      gs_free char *quoted = g_shell_quote (*arg);
+      g_string_append (command, quoted);
+    }
+  }
+  return g_string_free (command, FALSE);
+}
+
+char *
+terminal_ssh_canonicalize_command (const char *command)
+{
+  gs_strfreev char **argv = NULL;
+  return command != NULL && g_shell_parse_argv (command, NULL, &argv, NULL) &&
+         g_str_equal (argv[0], "ssh") ? terminal_ssh_join_command (argv) : NULL;
+}
+
 /* The server's login shell parses the remote command before /bin/sh.
  * Passing only octal bytes keeps input literal under both sh and csh. */
 static void
@@ -86,12 +116,15 @@ append_remote_argument (GString *command,
 
 static char *
 remote_shell_command (const char *directory,
-                      const char *login_command)
+                      const char *login_command,
+                      gboolean require_directory)
 {
   GString *command = g_string_new ("exec /bin/sh -c '"
                                    "if [ -n \"$1\" ]; then "
                                    "directory=$(printf \"%b.\" \"$1\"); "
-                                   "if ! cd \"${directory%.}\"; then cd \"$HOME\"; set -- \"$1\" \"\"; fi; fi; "
+                                   "if ! cd -P \"${directory%.}\"; then ");
+  g_string_append (command, require_directory ? "exit 1; " : "cd \"$HOME\"; set -- \"$1\" \"\"; ");
+  g_string_append (command, "fi; fi; "
                                    "SHELL=${SHELL:-/bin/sh}; VTE_VERSION=5200; export SHELL VTE_VERSION; "
                                    "if [ -n \"$2\" ]; then "
                                    "startup=$(printf \"%b\\nexec \\\"\\$SHELL\\\" -l.\" \"$2\"); "
@@ -107,6 +140,7 @@ terminal_ssh_build_argv (const char *command,
                          const char *credential,
                          const char *remote_directory,
                          const char *login_command,
+                         gboolean require_directory,
                          GError **error)
 {
   gs_strfreev char **argv = NULL;
@@ -131,7 +165,7 @@ terminal_ssh_build_argv (const char *command,
     argv = g_realloc_n (argv, argc + 3, sizeof *argv);
     memmove (argv + 2, argv + 1, (argc - 1) * sizeof *argv);
     argv[1] = g_strdup ("-t");
-    argv[argc + 1] = remote_shell_command (remote_directory, login_command);
+    argv[argc + 1] = remote_shell_command (remote_directory, login_command, require_directory);
     argc += 2;
     argv[argc] = NULL;
   }
@@ -159,18 +193,22 @@ run_password_helper (const char *operation,
 {
   gs_free char *helper = helper_path ();
   const char *argv[] = { helper, operation, credential, NULL };
-  gs_unref_object GSubprocessLauncher *launcher =
-    g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-                               G_SUBPROCESS_FLAGS_STDERR_SILENCE |
-                               (store ? G_SUBPROCESS_FLAGS_STDIN_PIPE : 0));
-
-  return g_subprocess_launcher_spawnv (launcher, argv, NULL);
+  return g_subprocess_newv (argv, G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+                                  G_SUBPROCESS_FLAGS_STDERR_SILENCE |
+                                  (store ? G_SUBPROCESS_FLAGS_STDIN_PIPE : 0), NULL);
 }
 
 void
 terminal_ssh_forget_password (const char *credential)
 {
   gs_unref_object GSubprocess *process = run_password_helper ("--forget", credential, FALSE);
+}
+
+gboolean
+terminal_ssh_remove_password (const char *credential)
+{
+  gs_unref_object GSubprocess *process = run_password_helper ("--forget", credential, FALSE);
+  return process != NULL && g_subprocess_wait_check (process, NULL, NULL);
 }
 
 char *
@@ -191,6 +229,12 @@ terminal_ssh_dup_password (const char *credential,
   if (process == NULL)
     return NULL;
   if (!g_subprocess_wait_check (process, NULL, NULL)) {
+    if (g_subprocess_get_if_exited (process) &&
+        g_subprocess_get_exit_status (process) == EX_NOINPUT) {
+      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                           _("The saved SSH password is no longer available."));
+      return NULL;
+    }
     g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
                          _("Could not copy the saved SSH password. Enter it again in SSH on Reopen."));
     return NULL;
@@ -205,11 +249,7 @@ typedef struct {
   GtkEntry *login_command;
   GtkEntry *password;
   GtkLabel *status;
-  char *pending_command;
-  char *pending_directory;
-  char *pending_login_command;
-  char *pending_credential;
-  gboolean busy;
+  gboolean directory_edited;
 } SshDialog;
 
 static void
@@ -217,57 +257,24 @@ ssh_dialog_free (gpointer data)
 {
   SshDialog *form = data;
   g_weak_ref_clear (&form->screen);
-  g_free (form->pending_command);
-  g_free (form->pending_directory);
-  g_free (form->pending_login_command);
-  g_free (form->pending_credential);
   g_free (form);
 }
 
-static void
-free_password_buffer (gpointer data)
+/* Commit a new password before returning from Save: closing the window
+ * immediately must neither miss the edited settings nor orphan the file. */
+static gboolean
+store_password (const char *credential,
+                const char *password)
 {
-  for (volatile char *p = data; *p != '\0'; ++p)
-    *p = '\0';
-  g_free (data);
-}
-
-static void
-password_update_finished (GObject *source,
-                          GAsyncResult *result,
-                          gpointer data)
-{
-  gs_unref_object GtkDialog *dialog = data;
-  SshDialog *form = g_object_get_data (G_OBJECT (dialog), "ssh-form");
-  GSubprocess *process = G_SUBPROCESS (source);
-  gboolean success = g_subprocess_communicate_finish (process, result, NULL, NULL, NULL) &&
-                     g_subprocess_get_successful (process);
-  gs_unref_object TerminalScreen *screen = g_weak_ref_get (&form->screen);
-
-  if (!gtk_widget_get_visible (GTK_WIDGET (dialog)) || screen == NULL) {
-    if (success && form->pending_credential != NULL)
-      terminal_ssh_forget_password (form->pending_credential);
-    return;
-  }
-
-  if (success) {
-    const char *old_credential = NULL;
-    terminal_screen_get_startup_ssh (screen, &old_credential);
-    if (form->pending_credential != NULL && old_credential != NULL &&
-        !g_str_equal (form->pending_credential, old_credential))
-      terminal_ssh_forget_password (old_credential);
-    terminal_screen_set_startup_ssh (screen, form->pending_command, form->pending_credential);
-    terminal_screen_set_startup_ssh_directory (screen, form->pending_directory);
-    terminal_screen_set_ssh_login_command (screen, form->pending_login_command);
-    gtk_widget_destroy (GTK_WIDGET (dialog));
-  } else {
-    form->busy = FALSE;
-    gtk_widget_set_sensitive (gtk_dialog_get_content_area (dialog), TRUE);
-    gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_ACCEPT, TRUE);
-    gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_REJECT, TRUE);
-    gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_CANCEL, TRUE);
-    gtk_label_set_text (form->status, _("Could not update the password in your home directory."));
-  }
+  gs_unref_object GSubprocess *process = run_password_helper ("--store", credential, TRUE);
+  if (process == NULL)
+    return FALSE;
+  gs_unref_bytes GBytes *input = g_bytes_new_static (password, strlen (password));
+  gboolean sent = g_subprocess_communicate (process, input, NULL, NULL, NULL, NULL);
+  if (g_subprocess_wait_check (process, NULL, NULL) && sent)
+    return TRUE;
+  terminal_ssh_forget_password (credential);
+  return FALSE;
 }
 
 static void
@@ -275,9 +282,6 @@ configure_response (GtkDialog *dialog,
                      int response,
                      SshDialog *form)
 {
-  if (form->busy)
-    return;
-
   if (response != GTK_RESPONSE_ACCEPT && response != GTK_RESPONSE_REJECT) {
     gtk_widget_destroy (GTK_WIDGET (dialog));
     return;
@@ -289,21 +293,30 @@ configure_response (GtkDialog *dialog,
     return;
   }
 
+  if (response == GTK_RESPONSE_REJECT) {
+    if (!terminal_screen_forget_ssh_password (screen))
+      gtk_label_set_text (form->status, _("Could not remove the saved SSH password."));
+    else
+      gtk_widget_destroy (GTK_WIDGET (dialog));
+    return;
+  }
+
   const char *old_credential = NULL;
   const char *old_command = terminal_screen_get_startup_ssh (screen, &old_credential);
-  gs_free char *command = response == GTK_RESPONSE_REJECT ? g_strdup (old_command) :
-                            g_strstrip (g_strdup (gtk_entry_get_text (form->command)));
-  const char *directory = response == GTK_RESPONSE_REJECT ?
-    terminal_screen_get_startup_ssh_directory (screen) : gtk_entry_get_text (form->directory);
-  const char *login_command = response == GTK_RESPONSE_REJECT ?
-    terminal_screen_get_ssh_login_command (screen) : gtk_entry_get_text (form->login_command);
-  if (command == NULL || *command == '\0') {
+  gs_free char *command = g_strstrip (g_strdup (gtk_entry_get_text (form->command)));
+  gs_free char *canonical = terminal_ssh_canonicalize_command (command);
+  gboolean keep = g_strcmp0 (canonical, old_command) == 0;
+  const char *directory = form->directory_edited ?
+    gtk_entry_get_text (form->directory) : keep ? terminal_screen_get_startup_ssh_directory (screen) : NULL;
+  const char *login_command = gtk_entry_get_text (form->login_command);
+  const char *password = gtk_entry_get_text (form->password);
+  gboolean store = *command != '\0' && *password != '\0';
+  if (*command == '\0') {
     directory = NULL;
     login_command = NULL;
   }
-  const char *password = response == GTK_RESPONSE_REJECT ? "" : gtk_entry_get_text (form->password);
-  gboolean store = command != NULL && *command != '\0' && *password != '\0';
-  gboolean keep = response == GTK_RESPONSE_ACCEPT && !store && g_strcmp0 (command, old_command) == 0;
+  gs_free char *reported = keep && !form->directory_edited ?
+    terminal_screen_dup_remote_directory (screen) : NULL;
 
   if (!store && *password != '\0') {
     gtk_label_set_text (form->status, _("Enter an SSH command before saving a password."));
@@ -312,7 +325,9 @@ configure_response (GtkDialog *dialog,
 
   if (command != NULL && *command != '\0') {
     gs_free_error GError *error = NULL;
-    gs_strfreev char **argv = terminal_ssh_build_argv (command, NULL, directory, login_command, &error);
+    gs_strfreev char **argv = terminal_ssh_build_argv (command, NULL,
+                                                     reported != NULL ? reported : directory,
+                                                     login_command, FALSE, &error);
     if (argv == NULL) {
       gtk_label_set_text (form->status, error->message);
       return;
@@ -324,50 +339,24 @@ configure_response (GtkDialog *dialog,
     return;
   }
 
-  if (!store && (old_credential == NULL || keep)) {
-    terminal_screen_set_startup_ssh (screen, command, keep ? old_credential : NULL);
-    terminal_screen_set_startup_ssh_directory (screen, directory);
-    terminal_screen_set_ssh_login_command (screen, login_command);
-    gtk_widget_destroy (GTK_WIDGET (dialog));
-    return;
-  }
-
   char new_credential[37];
   if (store) {
     uuid_t uuid;
     uuid_generate (uuid);
     uuid_unparse (uuid, new_credential);
+    gboolean stored = store_password (new_credential, password);
+    gtk_entry_set_text (form->password, "");
+    if (!stored) {
+      gtk_label_set_text (form->status, _("Could not update the password in your home directory."));
+      return;
+    }
   }
 
-  gs_unref_object GSubprocess *process = store ?
-    run_password_helper ("--store", new_credential, TRUE) :
-    run_password_helper ("--forget", old_credential, FALSE);
-  if (process == NULL) {
-    gtk_label_set_text (form->status, _("Could not start the SSH password helper."));
-    return;
-  }
-
-  g_free (form->pending_command);
-  g_free (form->pending_directory);
-  g_free (form->pending_login_command);
-  g_free (form->pending_credential);
-  form->pending_command = g_strdup (command);
-  form->pending_directory = g_strdup (directory);
-  form->pending_login_command = g_strdup (login_command);
-  form->pending_credential = store ? g_strdup (new_credential) : NULL;
-  form->busy = TRUE;
-  gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_ACCEPT, FALSE);
-  gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_REJECT, FALSE);
-  gtk_dialog_set_response_sensitive (dialog, GTK_RESPONSE_CANCEL, FALSE);
-  gtk_label_set_text (form->status, _("Updating the saved password…"));
-  gs_unref_bytes GBytes *input = NULL;
-  if (store) {
-    char *buffer = g_strdup (password);
-    input = g_bytes_new_with_free_func (buffer, strlen (buffer), free_password_buffer, buffer);
-  }
-  g_subprocess_communicate_async (process, input, NULL, password_update_finished, g_object_ref (dialog));
-  gtk_entry_set_text (form->password, "");
-  gtk_widget_set_sensitive (gtk_dialog_get_content_area (dialog), FALSE);
+  terminal_screen_set_startup_ssh (screen, canonical, store ? new_credential : keep ? old_credential : NULL);
+  if (form->directory_edited || !keep)
+    terminal_screen_set_startup_ssh_directory (screen, directory);
+  terminal_screen_set_ssh_login_command (screen, login_command);
+  gtk_widget_destroy (GTK_WIDGET (dialog));
 }
 
 static void
@@ -375,6 +364,15 @@ clear_command_status (GtkEditable *entry,
                       GtkLabel *status)
 {
   gtk_label_set_text (status, "");
+}
+
+static void
+edit_directory (GtkEditable *entry,
+                GtkDialog *dialog)
+{
+  SshDialog *form = g_object_get_data (G_OBJECT (dialog), "ssh-form");
+  form->directory_edited = TRUE;
+  gtk_label_set_text (form->status, "");
 }
 
 static GtkWidget *
@@ -402,12 +400,14 @@ terminal_ssh_configure (GtkWindow *parent,
     terminal_screen_get_startup_ssh_directory (screen);
   const char *login_command = terminal_screen_get_ssh_login_command (screen);
   const char *command = terminal_screen_get_startup_ssh (screen, &credential);
+  const char *active_credential = NULL;
+  terminal_screen_get_active_ssh (screen, &active_credential, NULL);
   GtkWidget *dialog = gtk_dialog_new_with_buttons (_("SSH on Reopen"), parent,
                                                    GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
                                                    _("_Cancel"), GTK_RESPONSE_CANCEL,
                                                    _("_Save"), GTK_RESPONSE_ACCEPT,
                                                    NULL);
-  if (credential != NULL)
+  if (credential != NULL || active_credential != NULL)
     gtk_dialog_add_button (GTK_DIALOG (dialog), _("_Forget Password"), GTK_RESPONSE_REJECT);
 
   GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
@@ -462,9 +462,9 @@ terminal_ssh_configure (GtkWindow *parent,
   form->status = GTK_LABEL (status);
   g_object_set_data_full (G_OBJECT (dialog), "ssh-form", form, ssh_dialog_free);
   g_signal_connect (dialog, "response", G_CALLBACK (configure_response), form);
-  g_signal_connect (command_entry, "changed", G_CALLBACK (clear_command_status), status);
-  g_signal_connect (directory_entry, "changed", G_CALLBACK (clear_command_status), status);
-  g_signal_connect (login_entry, "changed", G_CALLBACK (clear_command_status), status);
+  g_signal_connect_object (command_entry, "changed", G_CALLBACK (clear_command_status), status, 0);
+  g_signal_connect_object (directory_entry, "changed", G_CALLBACK (edit_directory), dialog, 0);
+  g_signal_connect_object (login_entry, "changed", G_CALLBACK (clear_command_status), status, 0);
   g_signal_connect_object (screen, "destroy", G_CALLBACK (gtk_widget_destroy), dialog, G_CONNECT_SWAPPED);
   gtk_widget_show_all (content);
   gtk_widget_grab_focus (command_entry);

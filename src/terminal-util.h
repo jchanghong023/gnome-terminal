@@ -68,6 +68,7 @@ void terminal_util_dialog_focus_widget (GtkBuilder *builder,
 gboolean terminal_util_dialog_response_on_delete (GtkWindow *widget);
 
 void terminal_util_add_proxy_env (GHashTable *env_table);
+char **terminal_util_get_host_proxy_environment (void);
 
 char **terminal_util_get_etc_shells (void);
 

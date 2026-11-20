@@ -65,11 +65,11 @@ cat > "$bundle/share/dbus-1/services/org.gnome.Terminal.service" <<'SERVICE'
 Name=org.gnome.Terminal
 Exec=/bin/sh -c 'exec "$GNOME_TERMINAL_PORTABLE_ROOT/libexec/gnome-terminal-server"'
 SERVICE
-# dbus-run-session reads the address on a separate FD; route the bus and
-# activated services' console output through the launcher's diagnostic filter.
+# dbus-run-session reads the address on a separate FD. Keep daemon and
+# activated service diagnostics separate from the client's stderr.
 cat > "$bundle/libexec/portable-dbus-daemon" <<'DAEMON'
 #!/bin/sh
-exec dbus-daemon "$@" >&2
+exec dbus-daemon "$@" >> "$GNOME_TERMINAL_PORTABLE_ROOT/diagnostics" 2>&1
 DAEMON
 chmod 755 "$bundle/libexec/portable-dbus-daemon"
 
@@ -133,7 +133,7 @@ if [ ! -d "$runtime" ] || [ ! -w "$runtime" ] || [ ! -x "$runtime" ] ||
    { [ -e "$runtime/dconf" ] && { [ ! -d "$runtime/dconf" ] ||
        [ ! -w "$runtime/dconf" ] || [ ! -x "$runtime/dconf" ]; }; }; then
   mkdir -m 700 "$root/runtime"
-  export XDG_RUNTIME_DIR="$root/runtime"
+  runtime=$root/runtime
 fi
 
 session_config=/usr/share/dbus-1/session.conf
@@ -151,10 +151,7 @@ cat > "$root/share/dbus-1/portable-session.conf" <<BUS_CONFIG
 </busconfig>
 BUS_CONFIG
 export GNOME_TERMINAL_PORTABLE_ROOT="$root"
-export GNOME_TERMINAL_PORTABLE_LOCALEDIR="$root/share/locale"
-export XDG_DATA_DIRS="$root/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-export GSETTINGS_SCHEMA_DIR="$root/share/glib-2.0/schemas"
-export DCONF_PROFILE="$root/share/dconf/portable-profile"
+: > "$root/diagnostics"
 unset GNOME_TERMINAL_SERVICE GNOME_TERMINAL_SCREEN
 
 set -- dbus-run-session --dbus-daemon="$root/libexec/portable-dbus-daemon" \
@@ -170,22 +167,27 @@ set -- dbus-run-session --dbus-daemon="$root/libexec/portable-dbus-daemon" \
 ' gnome-terminal "$@"
 if [ -n "$locale_name" ]; then
   # Pass LOCPATH at process start so libc has not cached another lookup path.
-  set -- env "LOCPATH=$root/lib/locale${LOCPATH:+:$LOCPATH}" "LC_ALL=$locale_name" "$@"
+  set -- "LOCPATH=$root/lib/locale${LOCPATH:+:$LOCPATH}" "LC_ALL=$locale_name" "$@"
 fi
 
-# D-Bus versions used on CentOS and Ubuntu format activation notices differently.
-# Preserve unknown diagnostics and the client's stdout and exit status.
-mkfifo "$root/diagnostics"
+# Collect desktop proxy defaults before switching to the private settings
+# and bus. The helper adds absent variables to the environment, then execs.
+set -- "$root/libexec/gnome-terminal-server" --portable-proxy-environment \
+  /usr/bin/env "XDG_RUNTIME_DIR=$runtime" \
+  "GNOME_TERMINAL_PORTABLE_LOCALEDIR=$root/share/locale" \
+  "XDG_DATA_DIRS=$root/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" \
+  "GSETTINGS_SCHEMA_DIR=$root/share/glib-2.0/schemas" \
+  "DCONF_PROFILE=$root/share/dconf/portable-profile" "$@"
+status=0
+"$@" || status=$?
+
+# A desktop handler launched by gio may still hold the daemon's log open.
+# Reading a regular file does not have to wait for that handler to exit.
 LC_ALL=C awk '
   /^(dbus-daemon(\[[0-9]+\])?: )?(\[session [^]]+\] )?(Activating service name=|Successfully activated service )/ { next }
   /^SpiRegistry daemon is running with well-known name / { next }
-  /^(\*\* )?(\([^)]*\):[[:space:]]+)?([^[:space:]]+-)?(DEBUG|INFO|MESSAGE|WARNING)[[:space:]*]*:/ { next }
-  { print; fflush() }
-' < "$root/diagnostics" >&2 &
-logger=$!
-status=0
-"$@" 2> "$root/diagnostics" || status=$?
-wait "$logger"
+  { print }
+' "$root/diagnostics" >&2
 exit "$status"
 __GNOME_TERMINAL_PAYLOAD__
 LAUNCHER

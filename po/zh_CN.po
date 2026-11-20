@@ -2240,6 +2240,10 @@ msgstr "该终端中仍然有一个进程在运行。关闭终端将杀死该进
 msgid "C_lose Window"
 msgstr "关闭窗口(_L)"
 
+#: ../src/terminal-options.c
+msgid "--print-environment is not supported with the portable terminal's private D-Bus session"
+msgstr "便携版终端使用独立的 D-Bus 会话，不支持 --print-environment"
+
 #: ../src/terminal-window.c
 msgid "Close the last tab?"
 msgstr "关闭最后一个标签页？"

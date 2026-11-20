@@ -176,6 +176,16 @@ int
 main (int argc,
       char *argv[])
 {
+  /* The portable launcher runs this before applying its private settings,
+   * without initializing GTK or starting the terminal service. */
+  if (argc >= 3 && g_getenv (TERMINAL_PORTABLE_ENV_ROOT) != NULL &&
+      g_str_equal (argv[1], "--portable-proxy-environment")) {
+    gs_strfreev char **env = terminal_util_get_host_proxy_environment ();
+    execve (argv[2], argv + 2, env);
+    g_printerr ("Could not start portable terminal session: %s\n", g_strerror (errno));
+    return EXIT_FAILURE;
+  }
+
   _terminal_debug_init ();
 
   gs_unref_object GApplication *app = NULL;

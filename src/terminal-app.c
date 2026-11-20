@@ -969,6 +969,33 @@ append_session_ssh_startup (GVariantBuilder *builder,
                          session_ssh_startup (screen), session_ssh_startup (peer));
 }
 
+static void
+forget_replaced_session_passwords (GVariant *previous,
+                                   GVariant *current)
+{
+  if (g_variant_n_children (previous) == 0)
+    return;
+
+  GHashTable *retained = g_hash_table_new (g_str_hash, g_str_equal);
+  GVariantIter iter;
+  const char *left, *right;
+
+  g_variant_iter_init (&iter, current);
+  while (g_variant_iter_next (&iter, "((&s&s)(&s&s))", NULL, &left, NULL, &right)) {
+    g_hash_table_add (retained, (gpointer) left);
+    g_hash_table_add (retained, (gpointer) right);
+  }
+
+  g_variant_iter_init (&iter, previous);
+  while (g_variant_iter_next (&iter, "((&s&s)(&s&s))", NULL, &left, NULL, &right)) {
+    if (*left != '\0' && g_hash_table_add (retained, (gpointer) left))
+      terminal_ssh_forget_password (left);
+    if (*right != '\0' && g_hash_table_add (retained, (gpointer) right))
+      terminal_ssh_forget_password (right);
+  }
+  g_hash_table_unref (retained);
+}
+
 void
 terminal_app_save_session (TerminalApp *app,
                            TerminalWindow *window)
@@ -1003,11 +1030,12 @@ terminal_app_save_session (TerminalApp *app,
 
   guint selected = MAX (0, terminal_mdi_container_get_active_screen_num (container));
   gs_unref_object GSettings *settings = g_settings_new (TERMINAL_SETTING_SCHEMA);
+  gs_unref_variant GVariant *previous_ssh = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
+  gs_unref_variant GVariant *current_ssh = g_variant_ref_sink (g_variant_builder_end (&ssh_builder));
   g_settings_delay (settings);
   gboolean saved_tabs = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_KEY,
                                               g_variant_new ("(ua(ayay))", selected, &builder));
-  gboolean saved_ssh = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY,
-                                             g_variant_builder_end (&ssh_builder));
+  gboolean saved_ssh = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY, current_ssh);
   gboolean saved_ssh_startup = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY,
                                                      g_variant_builder_end (&ssh_startup_builder));
   gboolean saved_titles = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_TITLES_KEY,
@@ -1025,6 +1053,11 @@ terminal_app_save_session (TerminalApp *app,
     terminal_screen_keep_startup_ssh (screen);
     if (peer != NULL)
       terminal_screen_keep_startup_ssh (peer);
+  }
+  if (g_variant_n_children (previous_ssh) != 0) {
+    gs_unref_variant GVariant *saved = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
+    if (g_variant_equal (saved, current_ssh))
+      forget_replaced_session_passwords (previous_ssh, current_ssh);
   }
 }
 
@@ -1181,6 +1214,9 @@ terminal_app_open_ssh_project (TerminalApp *app,
                                                 command, screen_credential, remote_directory, login_command);
   TerminalScreen *peer = split ? new_session_screen (profile, NULL, child_env,
                                                       command, peer_credential, remote_directory, login_command) : NULL;
+  terminal_screen_set_project_launch (screen, TRUE);
+  if (peer != NULL)
+    terminal_screen_set_project_launch (peer, TRUE);
   add_session_screens (window, screen, peer);
   terminal_window_switch_screen (window, screen);
   gtk_widget_grab_focus (GTK_WIDGET (screen));

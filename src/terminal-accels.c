@@ -173,8 +173,9 @@ static KeyEntry terminal_entries[] = {
 static KeyEntry tabs_entries[] = {
   ENTRY_MDI (N_("Switch to Previous Tab"), KEY_PREV_TAB,       "tab-switch-left",  NULL, NULL),
   ENTRY_MDI (N_("Switch to Next Tab"),     KEY_NEXT_TAB,       "tab-switch-right", NULL, NULL),
-  ENTRY_MDI (N_("Switch to Previous Tab in Project"), KEY_PREV_PROJECT_TAB, "project-tab-switch", "b", "false"),
-  ENTRY_MDI (N_("Switch to Next Tab in Project"),     KEY_NEXT_PROJECT_TAB, "project-tab-switch", "b", "true"),
+  /* Pass these keys to the terminal when there is no other tab in the project. */
+  ENTRY_FULL (N_("Switch to Previous Tab in Project"), KEY_PREV_PROJECT_TAB, "project-tab-switch", "b", "false", NULL),
+  ENTRY_FULL (N_("Switch to Next Tab in Project"),     KEY_NEXT_PROJECT_TAB, "project-tab-switch", "b", "true",  NULL),
   ENTRY_MDI (N_("Move Tab to the Left"),   KEY_MOVE_TAB_LEFT,  "tab-move-left",    NULL, NULL),
   ENTRY_MDI (N_("Move Tab to the Right"),  KEY_MOVE_TAB_RIGHT, "tab-move-right",   NULL, NULL),
   ENTRY_MDI (N_("Detach Tab"),             KEY_DETACH_TAB,     "tab-detach",       NULL, NULL),
