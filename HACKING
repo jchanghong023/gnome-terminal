@@ -20,12 +20,19 @@ the usual GNOME Terminal build tools. With the build toolchain enabled, run:
 
     sh build-portable.sh /path/to/gnome-terminal-centos7-x86_64.run
 
-The .run file needs a CentOS 7 graphical desktop and its GTK, GLib and
-D-Bus runtime, but no installation or FUSE. Launch it with:
+The .run file needs a CentOS 7 graphical desktop with GTK, GLib (including
+gdbus and gio) and dbus-run-session, but no installation or FUSE. Launch it with:
 
     sh ./gnome-terminal-centos7-x86_64.run
 
-It extracts to a temporary directory and uses a private session bus and
-dconf database. It keeps working host UTF-8 locales and uses a bundled
-locale when needed: zhcn.utf-8 becomes zh_CN.UTF-8; other unavailable
-locales fall back to en_US.UTF-8. System locale settings are not changed.
+It extracts to a temporary directory and starts the bundled Terminal on a
+private session bus, with preferences stored in the separate
+gnome_terminal_portable dconf database. Shells, commands and URI handlers
+use the launching desktop's session bus and settings instead. Terminal
+keeps its own dark theme without overriding the user's GTK_THEME for
+other applications.
+
+The launcher keeps working host UTF-8 locales and uses a bundled locale
+when needed: zhcn.utf-8 becomes zh_CN.UTF-8; other unavailable locales fall
+back to en_US.UTF-8. Child commands keep this locale fallback. System
+locale settings are not changed.

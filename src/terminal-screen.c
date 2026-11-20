@@ -89,6 +89,8 @@ struct _TerminalScreenPrivate
   guint profile_changed_id;
   guint profile_forgotten_id;
   char *initial_working_directory;
+  gboolean project_launch;
+  gboolean confirm_direct_child;
   char *custom_title;
   char **initial_env;
   char **override_command;
@@ -717,6 +719,14 @@ terminal_screen_new (GSettings       *profile,
   return screen;
 }
 
+void
+terminal_screen_set_project_launch (TerminalScreen *screen,
+                                    gboolean confirm_direct_child)
+{
+  screen->priv->project_launch = TRUE;
+  screen->priv->confirm_direct_child = confirm_direct_child;
+}
+
 gboolean 
 terminal_screen_exec (TerminalScreen *screen,
                       char          **argv,
@@ -1182,7 +1192,6 @@ get_child_environment (TerminalScreen *screen,
                        const char *cwd,
                        char **shell)
 {
-  TerminalApp *app = terminal_app_get ();
   TerminalScreenPrivate *priv = screen->priv;
   char **env;
   char *e, *v;
@@ -1223,13 +1232,15 @@ get_child_environment (TerminalScreen *screen,
 
   terminal_util_add_proxy_env (env_table);
 
-  /* Add gnome-terminal private env vars used to communicate back to g-t-server */
-  GDBusConnection *connection = g_application_get_dbus_connection (G_APPLICATION (app));
-  g_hash_table_replace (env_table, g_strdup (TERMINAL_ENV_SERVICE_NAME),
-                        g_strdup (g_dbus_connection_get_unique_name (connection)));
-
-  g_hash_table_replace (env_table, g_strdup (TERMINAL_ENV_SCREEN),
-                        terminal_app_dup_screen_object_path (app, screen));
+  /* These identifiers are only useful on the bus shared with the server. */
+  if (g_getenv (TERMINAL_PORTABLE_ENV_ROOT) == NULL) {
+    TerminalApp *app = terminal_app_get ();
+    GDBusConnection *connection = g_application_get_dbus_connection (G_APPLICATION (app));
+    g_hash_table_replace (env_table, g_strdup (TERMINAL_ENV_SERVICE_NAME),
+                          g_strdup (g_dbus_connection_get_unique_name (connection)));
+    g_hash_table_replace (env_table, g_strdup (TERMINAL_ENV_SCREEN),
+                          terminal_app_dup_screen_object_path (app, screen));
+  }
 
   /* Convert to strv */
   retval = g_ptr_array_sized_new (g_hash_table_size (env_table));
@@ -1434,7 +1445,8 @@ terminal_screen_do_exec (TerminalScreen *screen,
   profile = priv->profile;
 
   if (priv->initial_working_directory &&
-      (priv->override_command != NULL ||
+      (priv->project_launch ||
+       priv->override_command != NULL ||
        !g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY)))
     working_dir = priv->initial_working_directory;
   else
@@ -1670,11 +1682,12 @@ terminal_screen_get_current_dir (TerminalScreen *screen)
   uri = vte_terminal_get_current_directory_uri (VTE_TERMINAL (screen));
   if (uri != NULL) {
     gs_free char *hostname = NULL;
-    gs_free char *path = g_filename_from_uri (uri, &hostname, NULL);
+    char *path = g_filename_from_uri (uri, &hostname, NULL);
 
     if (hostname == NULL || g_ascii_strcasecmp (hostname, "localhost") == 0 ||
         g_ascii_strcasecmp (hostname, g_get_host_name ()) == 0)
-      return g_steal_pointer (&path);
+      return path;
+    g_free (path);
     return NULL;
   }
 
@@ -2055,10 +2068,10 @@ terminal_screen_check_extra (TerminalScreen *screen,
  * @process_name: (out) (allow-none): the basename of the program, or %NULL
  * @cmdline: (out) (allow-none): the full command line, or %NULL
  *
- * Checks whether there's a foreground process running in
- * this terminal.
+ * Checks whether there's a foreground process other than the primary child
+ * or a running direct child that requires close confirmation.
  * 
- * Returns: %TRUE iff there's a foreground process running in @screen
+ * Returns: %TRUE iff such a process is running in @screen
  */
 gboolean
 terminal_screen_has_foreground_process (TerminalScreen *screen,
@@ -2085,17 +2098,24 @@ terminal_screen_has_foreground_process (TerminalScreen *screen,
   if (priv->child_pid == -1)
     return FALSE;
 
-  pty = vte_terminal_get_pty (VTE_TERMINAL (screen));
-  if (pty == NULL)
-    return FALSE;
+  if (priv->confirm_direct_child) {
+    fgpid = priv->child_pid;
+  } else {
+    pty = vte_terminal_get_pty (VTE_TERMINAL (screen));
+    if (pty == NULL)
+      return FALSE;
 
-  fd = vte_pty_get_fd (pty);
-  if (fd == -1)
-    return FALSE;
+    fd = vte_pty_get_fd (pty);
+    if (fd == -1)
+      return FALSE;
 
-  fgpid = tcgetpgrp (fd);
-  if (fgpid == -1 || fgpid == priv->child_pid)
-    return FALSE;
+    fgpid = tcgetpgrp (fd);
+    if (fgpid == -1 || fgpid == priv->child_pid)
+      return FALSE;
+  }
+
+  if (!process_name && !cmdline)
+    return TRUE;
 
 #if defined(__FreeBSD__) || defined(__DragonFly__)
   mib[0] = CTL_KERN;
@@ -2134,9 +2154,6 @@ terminal_screen_has_foreground_process (TerminalScreen *screen,
 
   name = g_filename_to_utf8 (basename, -1, NULL, NULL, NULL);
   if (!name)
-    return TRUE;
-
-  if (!process_name && !cmdline)
     return TRUE;
 
   if (process_name)

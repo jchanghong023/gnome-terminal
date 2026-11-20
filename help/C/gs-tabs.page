@@ -33,11 +33,11 @@
 
   <p>By default, <app>Terminal</app> lists tabs in the left sidebar, one
   title per row. Click a title to switch to that tab. Drag the divider to
-  resize the sidebar. Its width is saved for new windows.</p>
+  resize the sidebar. Only changes you make to the divider are saved for
+  new windows.</p>
 
-  <p>Type a project name in <gui>Search projects</gui> at the top of the
-  sidebar, or focus the field with
-  <keyseq><key>Ctrl</key><key>Shift</key><key>P</key></keyseq>.
+  <p>When the sidebar is visible, type a project name in <gui>Search projects</gui>,
+  or focus the field with <keyseq><key>Ctrl</key><key>Shift</key><key>P</key></keyseq>.
   Use <key>Up</key> or <key>Down</key> to select a result and
   <key>Enter</key> to switch to an existing terminal. A collapsed result
   switches to its first terminal without expanding it. Press <key>Esc</key>
@@ -56,7 +56,8 @@
   <p>In a split tab, click either pane to direct typing and terminal
   shortcuts to it. Closing the tab closes both terminals. If one shell
   exits and its profile would normally close the terminal, that pane shows
-  its exit status instead; the other terminal keeps running.</p>
+  its exit status instead; the other terminal keeps running. The window's
+  terminal size presets are available only on single-terminal tabs.</p>
 
   <p>Use <gui>Project options</gui> to change or remove a project directory,
   or to move a project up or down. Existing terminals stay open. The
@@ -66,7 +67,9 @@
   <p>Choose <gui>Open in Neovim</gui> from <gui>Project options</gui> to
   open the project directory in Neovim in a new tab. Neovim opens its
   built-in terminal in a bottom split, ready for input. The command
-  requires <cmd>nvim</cmd> on the executable search path.</p>
+  requires <cmd>nvim</cmd> on the executable search path. If closing
+  confirmation is enabled, closing the tab while Neovim is running asks
+  for confirmation.</p>
 
   <p>Tabs are grouped under the most specific saved project that contains
   their starting directory. Changing directory inside a terminal does

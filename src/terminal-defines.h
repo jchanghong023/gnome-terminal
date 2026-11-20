@@ -43,6 +43,41 @@ enum {
 #define TERMINAL_ENV_SERVICE_NAME               "GNOME_TERMINAL_SERVICE"
 #define TERMINAL_ENV_SCREEN                     "GNOME_TERMINAL_SCREEN"
 
+#define TERMINAL_PORTABLE_ENV_ROOT               "GNOME_TERMINAL_PORTABLE_ROOT"
+#define TERMINAL_PORTABLE_ENV_LOCALEDIR          "GNOME_TERMINAL_PORTABLE_LOCALEDIR"
+
+/* Restore the values saved by the portable launcher, but leave its locale
+ * fallback in place so commands still run in a usable UTF-8 locale. */
+static inline char **
+terminal_portable_restore_host_environment (char **envv)
+{
+  static const struct {
+    const char *name;
+    const char *saved_name;
+  } vars[] = {
+#define HOST_ENV(name) { #name, "GNOME_TERMINAL_PORTABLE_HOST_" #name }
+    HOST_ENV (DBUS_SESSION_BUS_ADDRESS),
+    HOST_ENV (DBUS_SESSION_BUS_PID),
+    HOST_ENV (DBUS_SESSION_BUS_WINDOWID),
+    HOST_ENV (DBUS_STARTER_ADDRESS),
+    HOST_ENV (DBUS_STARTER_BUS_TYPE),
+    HOST_ENV (DCONF_PROFILE),
+    HOST_ENV (XDG_DATA_DIRS),
+    HOST_ENV (GSETTINGS_SCHEMA_DIR),
+#undef HOST_ENV
+  };
+
+  for (guint i = 0; i < G_N_ELEMENTS (vars); i++) {
+    const char *value = g_environ_getenv (envv, vars[i].saved_name);
+    envv = value != NULL ? g_environ_setenv (envv, vars[i].name, value, TRUE)
+                         : g_environ_unsetenv (envv, vars[i].name);
+    envv = g_environ_unsetenv (envv, vars[i].saved_name);
+  }
+
+  envv = g_environ_unsetenv (envv, TERMINAL_PORTABLE_ENV_ROOT);
+  return g_environ_unsetenv (envv, TERMINAL_PORTABLE_ENV_LOCALEDIR);
+}
+
 G_END_DECLS
 
 #endif /* !TERMINAL_DEFINES_H */

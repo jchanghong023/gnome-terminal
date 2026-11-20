@@ -94,12 +94,22 @@ show_error (TerminalWindow *window,
   gtk_widget_show (dialog);
 }
 
+static void
+align_label_start (GtkWidget *label)
+{
+#if GTK_CHECK_VERSION (3, 16, 0)
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+#else
+  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
+#endif
+}
+
 static GtkWidget *
 new_label (const char *text)
 {
   GtkWidget *label = gtk_label_new (text);
 
-  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  align_label_start (label);
   gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
   gtk_label_set_single_line_mode (GTK_LABEL (label), TRUE);
   return label;
@@ -252,11 +262,15 @@ open_project_tab (GtkListBoxRow *row,
   gs_unref_object GSettings *profile =
     terminal_settings_list_ref_default_child (terminal_app_get_profiles_list (app));
   TerminalScreen *active = terminal_mdi_container_get_active_screen (sidebar->container);
+  TerminalNewTerminalFlags flags = TERMINAL_NEW_TERMINAL_PROJECT;
+
+  if (split)
+    flags |= TERMINAL_NEW_TERMINAL_SPLIT;
 
   set_project_collapsed (sidebar, uri, FALSE);
   terminal_app_new_terminal (app, sidebar->window, profile, NULL, command, NULL, path,
                              active ? terminal_screen_get_initial_environment (active) : NULL,
-                             1.0, split);
+                             1.0, flags);
 }
 
 static void
@@ -376,8 +390,10 @@ new_group_row (GtkListBox *list,
   GtkWidget *label;
   PangoAttrList *attrs = pango_attr_list_new ();
 
+#if GTK_CHECK_VERSION (3, 14, 0)
   gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), FALSE);
   gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
+#endif
   gtk_widget_set_can_focus (row, FALSE);
   gtk_widget_set_margin_start (box, 10);
   gtk_widget_set_margin_end (box, 4);
@@ -491,7 +507,7 @@ rename_tab (TerminalWindow *window,
 
   gtk_container_set_border_width (GTK_CONTAINER (content), 12);
   gtk_box_set_spacing (GTK_BOX (content), 6);
-  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  align_label_start (label);
   gtk_label_set_mnemonic_widget (GTK_LABEL (label), entry);
   gtk_label_set_ellipsize (GTK_LABEL (hint), PANGO_ELLIPSIZE_NONE);
   if (title != NULL)
@@ -631,7 +647,8 @@ rebuild_rows (GtkListBox *list)
     GtkWidget *row = new_terminal_row (list, screen, group);
     if (tail != NULL) {
       gtk_list_box_insert (list, row, gtk_list_box_row_get_index (tail) + 1);
-      g_hash_table_insert (tails, g_steal_pointer (&directory), row);
+      g_hash_table_insert (tails, directory, row);
+      directory = NULL;
     } else {
       if (!has_other) {
         gtk_list_box_insert (list, new_group_row (list, NULL, FALSE, FALSE), -1);
@@ -905,15 +922,17 @@ update_project_directory (GtkListBox *list,
 
   if (old_uri == NULL) {
     projects = g_renew (char *, projects, n + 2);
-    projects[n] = g_steal_pointer (&uri);
+    projects[n] = uri;
+    uri = NULL;
     projects[n + 1] = NULL;
   } else if (index < 0) {
     return;
   } else {
     old_project = projects[index];
-    if (uri != NULL)
-      projects[index] = g_steal_pointer (&uri);
-    else
+    if (uri != NULL) {
+      projects[index] = uri;
+      uri = NULL;
+    } else
       for (guint i = index; i < n; i++)
         projects[i] = projects[i + 1];
   }
@@ -1054,6 +1073,9 @@ terminal_project_sidebar_new (TerminalWindow *window,
   gtk_widget_set_no_show_all (column, TRUE);
   g_object_bind_property_full (container, "tab-pos", column, "visible", G_BINDING_SYNC_CREATE,
                                show_sidebar_on_left, NULL, NULL, NULL);
+  g_object_bind_property (column, "visible",
+                          g_action_map_lookup_action (G_ACTION_MAP (window), "find-project"),
+                          "enabled", G_BINDING_SYNC_CREATE);
 
   g_signal_connect_object (sidebar->settings, "changed::" TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY,
                            G_CALLBACK (rebuild_rows), list, G_CONNECT_SWAPPED);

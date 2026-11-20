@@ -39,6 +39,7 @@
 
 #include "terminal-accels.h"
 #include "terminal-app.h"
+#include "terminal-defines.h"
 #include "terminal-intl.h"
 #include "terminal-util.h"
 #include "terminal-libgsystem.h"
@@ -111,6 +112,55 @@ terminal_util_show_error_dialog (GtkWindow *transient_parent,
     }
 }
 
+static char *host_gtk_theme;
+
+void
+terminal_util_force_dark_theme (void)
+{
+  host_gtk_theme = g_strdup (g_getenv ("GTK_THEME"));
+  g_setenv ("GTK_THEME", "Adwaita:dark", TRUE);
+}
+
+static void
+portable_uri_opened_cb (GPid pid,
+                        int status,
+                        gpointer user_data)
+{
+  gs_free char *uri = user_data;
+  gs_free_error GError *error = NULL;
+
+  g_spawn_close_pid (pid);
+  if (!g_spawn_check_exit_status (status, &error))
+    terminal_util_show_error_dialog (NULL, NULL, error,
+                                     _("Could not open the address “%s”"),
+                                     uri);
+}
+
+static gboolean
+portable_open_url (char *uri,
+                   GError **error)
+{
+  gs_strfreev char **envv = terminal_portable_restore_host_environment (g_get_environ ());
+  char *argv[] = { (char *) "gio", (char *) "open", (char *) "--", uri, NULL };
+  GPid pid;
+
+  if (host_gtk_theme != NULL)
+    envv = g_environ_setenv (envv, "GTK_THEME", host_gtk_theme, TRUE);
+  else
+    envv = g_environ_unsetenv (envv, "GTK_THEME");
+
+  /* GIO uses the process's session bus for D-Bus activation, not the address
+   * in a launch context. Keep its diagnostics on stderr rather than waiting
+   * for a handler to close an inherited stderr pipe. */
+  if (!g_spawn_async (NULL, argv, envv,
+                      G_SPAWN_SEARCH_PATH_FROM_ENVP | G_SPAWN_DO_NOT_REAP_CHILD,
+                      NULL, NULL, &pid, error))
+    return FALSE;
+
+  g_child_watch_add (pid, portable_uri_opened_cb, g_strdup (uri));
+  return TRUE;
+}
+
 static gboolean
 open_url (GtkWindow *parent,
           const char *uri,
@@ -118,31 +168,56 @@ open_url (GtkWindow *parent,
           GError **error)
 {
   GdkScreen *screen;
+  gs_unref_object GdkAppLaunchContext *context = NULL;
   gs_free char *uri_fixed;
-
-  if (parent)
-    screen = gtk_widget_get_screen (GTK_WIDGET (parent));
-  else
-    screen = gdk_screen_get_default ();
 
   uri_fixed = terminal_util_uri_fixup (uri, error);
   if (uri_fixed == NULL)
     return FALSE;
 
-  return gtk_show_uri (screen, uri_fixed, user_time, error);
+  if (g_getenv (TERMINAL_PORTABLE_ENV_ROOT) != NULL)
+    return portable_open_url (uri_fixed, error);
+
+  screen = parent ? gtk_widget_get_screen (GTK_WIDGET (parent)) : gdk_screen_get_default ();
+  context = gdk_display_get_app_launch_context (gdk_screen_get_display (screen));
+  gdk_app_launch_context_set_screen (context, screen);
+  gdk_app_launch_context_set_timestamp (context, user_time);
+
+  if (host_gtk_theme != NULL)
+    g_app_launch_context_setenv (G_APP_LAUNCH_CONTEXT (context), "GTK_THEME", host_gtk_theme);
+  else
+    g_app_launch_context_unsetenv (G_APP_LAUNCH_CONTEXT (context), "GTK_THEME");
+
+  return g_app_info_launch_default_for_uri (uri_fixed, G_APP_LAUNCH_CONTEXT (context), error);
+}
+
+static char *
+portable_help_uri (const char *root,
+                   const char *topic)
+{
+  /* The host's help browser no longer sees the bundle in XDG_DATA_DIRS.
+   * Point Yelp at the localized Mallard directory directly. */
+  for (const char * const *language = g_get_language_names (); *language; ++language) {
+    gs_free char *directory = g_build_filename (root, "share", "help", *language,
+                                                "gnome-terminal", NULL);
+    if (g_file_test (directory, G_FILE_TEST_IS_DIR))
+      return g_strconcat ("ghelp:", directory, topic ? "?" : "", topic, NULL);
+  }
+
+  return NULL;
 }
 
 void
 terminal_util_show_help (const char *topic)
 {
   gs_free_error GError *error = NULL;
-  gs_free char *uri;
+  gs_free char *uri = NULL;
+  const char *root = g_getenv (TERMINAL_PORTABLE_ENV_ROOT);
 
-  if (topic) {
-    uri = g_strdup_printf ("help:gnome-terminal/%s", topic);
-  } else {
-    uri = g_strdup ("help:gnome-terminal");
-  }
+  if (root != NULL)
+    uri = portable_help_uri (root, topic);
+  if (uri == NULL)
+    uri = g_strconcat ("help:gnome-terminal", topic ? "/" : "", topic, NULL);
 
   if (!open_url (NULL, uri, gtk_get_current_event_time (), &error))
     {
@@ -154,6 +229,16 @@ terminal_util_show_help (const char *topic)
 #define ABOUT_GROUP "About"
 #define ABOUT_URL "https://wiki.gnome.org/Apps/Terminal"
 #define EMAILIFY(string) (g_strdelimit ((string), "%", '@'))
+
+static gboolean
+about_activate_link_cb (GtkAboutDialog *dialog,
+                        const char *uri,
+                        gpointer user_data)
+{
+  terminal_util_open_url (GTK_WIDGET (dialog), uri, FLAVOR_AS_IS,
+                         gtk_get_current_event_time ());
+  return TRUE;
+}
 
 void
 terminal_util_show_about (void)
@@ -247,6 +332,7 @@ terminal_util_show_about (void)
                          "logo-icon-name", GNOME_TERMINAL_ICON_NAME,
                          NULL);
 
+  g_signal_connect (dialog, "activate-link", G_CALLBACK (about_activate_link_cb), NULL);
   g_signal_connect (dialog, "response", G_CALLBACK (gtk_widget_destroy), NULL);
   gtk_window_present (dialog);
 

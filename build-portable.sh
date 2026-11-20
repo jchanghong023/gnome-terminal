@@ -31,7 +31,8 @@ tar --exclude=.git --exclude='*.run' -cf - -C "$source_dir" . | tar -xf - -C "$w
 cd "$work/source"
 intltoolize --force --copy
 autoreconf -fi
-LDFLAGS="${LDFLAGS:+$LDFLAGS }-Wl,-rpath,'\$\$ORIGIN/../lib'" \
+# Use a transitive RPATH so VTE's PCRE2 dependency comes from the bundle too.
+LDFLAGS="${LDFLAGS:+$LDFLAGS }-Wl,--disable-new-dtags,-rpath,'\$\$ORIGIN/../lib'" \
   ./configure --prefix=/usr --disable-migration --disable-search-provider --without-nautilus-extension
 make -j"${JOBS:-$(getconf _NPROCESSORS_ONLN)}" -C src
 make -C src DESTDIR="$work/stage" install
@@ -58,7 +59,7 @@ for language in zh_CN en_US; do
   test "$(LOCPATH="$bundle/lib/locale" LC_ALL="$language.UTF-8" locale charmap)" = UTF-8
 done
 glib-compile-schemas --strict "$bundle/share/glib-2.0/schemas"
-printf '%s\n' 'user-db:gnome-terminal-portable' > "$bundle/share/dconf/portable-profile"
+printf '%s\n' 'user-db:gnome_terminal_portable' > "$bundle/share/dconf/portable-profile"
 cat > "$bundle/share/dbus-1/services/org.gnome.Terminal.service" <<'SERVICE'
 [D-BUS Service]
 Name=org.gnome.Terminal
@@ -70,7 +71,7 @@ cat > "$output_tmp" <<'LAUNCHER'
 #!/bin/sh
 set -eu
 
-for command in dbus-run-session gdbus; do
+for command in dbus-run-session gdbus gio; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "GNOME Terminal requires $command from the CentOS 7 desktop." >&2
     exit 1
@@ -98,6 +99,38 @@ case "$requested" in
     fi
     ;;
 esac
+
+# Keep unset and empty values distinct when restoring the caller's environment.
+save_host_env () {
+  if [ -n "$2" ]; then
+    export "GNOME_TERMINAL_PORTABLE_HOST_$1=$3"
+  else
+    unset "GNOME_TERMINAL_PORTABLE_HOST_$1"
+  fi
+}
+save_host_env DBUS_SESSION_BUS_ADDRESS "${DBUS_SESSION_BUS_ADDRESS+x}" "${DBUS_SESSION_BUS_ADDRESS-}"
+save_host_env DBUS_SESSION_BUS_PID "${DBUS_SESSION_BUS_PID+x}" "${DBUS_SESSION_BUS_PID-}"
+save_host_env DBUS_SESSION_BUS_WINDOWID "${DBUS_SESSION_BUS_WINDOWID+x}" "${DBUS_SESSION_BUS_WINDOWID-}"
+save_host_env DBUS_STARTER_ADDRESS "${DBUS_STARTER_ADDRESS+x}" "${DBUS_STARTER_ADDRESS-}"
+save_host_env DBUS_STARTER_BUS_TYPE "${DBUS_STARTER_BUS_TYPE+x}" "${DBUS_STARTER_BUS_TYPE-}"
+save_host_env DCONF_PROFILE "${DCONF_PROFILE+x}" "${DCONF_PROFILE-}"
+save_host_env XDG_DATA_DIRS "${XDG_DATA_DIRS+x}" "${XDG_DATA_DIRS-}"
+save_host_env GSETTINGS_SCHEMA_DIR "${GSETTINGS_SCHEMA_DIR+x}" "${GSETTINGS_SCHEMA_DIR-}"
+
+session_config=/usr/share/dbus-1/session.conf
+if [ ! -r "$session_config" ]; then
+  session_config=/etc/dbus-1/session.conf
+fi
+# An explicit service directory before the host defaults beats XDG_DATA_HOME
+# without hiding host services such as the dconf writer.
+cat > "$root/share/dbus-1/portable-session.conf" <<BUS_CONFIG
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <servicedir>services</servicedir>
+  <include>$session_config</include>
+</busconfig>
+BUS_CONFIG
 export GNOME_TERMINAL_PORTABLE_ROOT="$root"
 export GNOME_TERMINAL_PORTABLE_LOCALEDIR="$root/share/locale"
 export XDG_DATA_DIRS="$root/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
@@ -105,7 +138,7 @@ export GSETTINGS_SCHEMA_DIR="$root/share/glib-2.0/schemas"
 export DCONF_PROFILE="$root/share/dconf/portable-profile"
 unset GNOME_TERMINAL_SERVICE GNOME_TERMINAL_SCREEN
 
-set -- dbus-run-session -- /bin/sh -c '
+set -- dbus-run-session --config-file="$root/share/dbus-1/portable-session.conf" -- /bin/sh -c '
   status=0
   "$GNOME_TERMINAL_PORTABLE_ROOT/bin/gnome-terminal" "$@" || status=$?
   while [ "$(gdbus call --session --dest org.freedesktop.DBus \

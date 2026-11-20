@@ -83,6 +83,9 @@ TerminalScreen *terminal_screen_new (GSettings       *profile,
                                      char           **child_env,
                                      double           zoom);
 
+void terminal_screen_set_project_launch (TerminalScreen *screen,
+                                         gboolean        confirm_direct_child);
+
 gboolean terminal_screen_exec (TerminalScreen *screen,
                                char          **argv,
                                char          **envv,

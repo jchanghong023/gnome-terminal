@@ -406,7 +406,7 @@ action_new_terminal_cb (GSimpleAction *action,
                              new_working_directory != NULL ? new_working_directory
                                                            : terminal_screen_get_initial_directory (priv->active_screen),
                              terminal_screen_get_initial_environment (priv->active_screen),
-                             1.0, FALSE);
+                             1.0, TERMINAL_NEW_TERMINAL_DEFAULT);
 
   if (mode == TERMINAL_NEW_TERMINAL_MODE_WINDOW)
     gtk_window_present (GTK_WINDOW (window));
@@ -983,7 +983,8 @@ action_size_to_cb (GSimpleAction *action,
 
   g_assert_nonnull (parameter);
 
-  if (priv->active_screen == NULL)
+  if (priv->active_screen == NULL ||
+      terminal_notebook_get_peer (priv->active_screen) != NULL)
     return;
 
   g_variant_get (parameter, "(uu)", &width, &height);
@@ -2065,6 +2066,139 @@ terminal_window_screen_changed (GtkWidget *widget,
   terminal_window_screen_update (window, screen);
 }
 
+typedef struct {
+  GtkPaned parent;
+  int sidebar_width;
+  gboolean allocating;
+} TerminalContentPaned;
+
+typedef GtkPanedClass TerminalContentPanedClass;
+
+static GType terminal_content_paned_get_type (void);
+G_DEFINE_TYPE (TerminalContentPaned, terminal_content_paned, GTK_TYPE_PANED)
+
+static void
+terminal_content_paned_measure_width (GtkWidget *widget,
+                                     int height,
+                                     int *minimum,
+                                     int *natural)
+{
+  TerminalContentPaned *content = (TerminalContentPaned *) widget;
+  GtkWidgetClass *parent_class = GTK_WIDGET_CLASS (terminal_content_paned_parent_class);
+  GtkWidget *sidebar = gtk_paned_get_child1 (GTK_PANED (widget));
+  int sidebar_minimum, sidebar_natural;
+
+  if (height < 0)
+    parent_class->get_preferred_width (widget, minimum, natural);
+  else
+    parent_class->get_preferred_width_for_height (widget, height, minimum, natural);
+
+  if (sidebar == NULL || !gtk_widget_get_visible (sidebar))
+    return;
+
+  if (height < 0)
+    gtk_widget_get_preferred_width (sidebar, &sidebar_minimum, &sidebar_natural);
+  else
+    gtk_widget_get_preferred_width_for_height (sidebar, height, &sidebar_minimum, &sidebar_natural);
+
+  /* GTK budgets the sidebar's natural width, not the divider position.
+   * Replace only that part of the request, retaining the themed handle
+   * width and the other child's request. Keep the minimum shrinkable. */
+  *natural += MAX (content->sidebar_width, sidebar_minimum) - sidebar_natural;
+}
+
+static void
+terminal_content_paned_get_preferred_width (GtkWidget *widget,
+                                           int *minimum,
+                                           int *natural)
+{
+  terminal_content_paned_measure_width (widget, -1, minimum, natural);
+}
+
+static void
+terminal_content_paned_size_allocate (GtkWidget *widget,
+                                      GtkAllocation *allocation)
+{
+  TerminalContentPaned *content = (TerminalContentPaned *) widget;
+  GtkPaned *paned = GTK_PANED (widget);
+  GtkWidget *sidebar = gtk_paned_get_child1 (paned);
+  int position = gtk_paned_get_position (paned);
+
+  content->allocating = TRUE;
+  if (position != content->sidebar_width &&
+      sidebar != NULL && gtk_widget_get_visible (sidebar)) {
+    int sidebar_minimum, content_minimum;
+    int available, width;
+
+    /* Restore the planned position when a temporary clamp no longer applies.
+     * Both children have shrink=FALSE, so the excess over the minimum
+     * requisition is the space that can go to either child. */
+    gtk_widget_get_preferred_width_for_height (sidebar, allocation->height, &sidebar_minimum, NULL);
+    gtk_widget_get_preferred_width_for_height (widget, allocation->height, &content_minimum, NULL);
+    available = sidebar_minimum + MAX (0, allocation->width - content_minimum);
+    width = CLAMP (content->sidebar_width, sidebar_minimum, available);
+    if (position != width)
+      gtk_paned_set_position (paned, width);
+  }
+
+  GTK_WIDGET_CLASS (terminal_content_paned_parent_class)->size_allocate (widget, allocation);
+  content->allocating = FALSE;
+}
+
+static void
+terminal_content_paned_init (TerminalContentPaned *content)
+{
+  GSettings *settings = terminal_app_get_global_settings (terminal_app_get ());
+
+  content->sidebar_width = MAX (0, g_settings_get_int (settings, TERMINAL_SETTING_PROJECT_SIDEBAR_WIDTH_KEY));
+  gtk_paned_set_position (GTK_PANED (content), content->sidebar_width);
+}
+
+static void
+terminal_content_paned_class_init (TerminalContentPanedClass *klass)
+{
+  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+
+  widget_class->get_preferred_width = terminal_content_paned_get_preferred_width;
+  widget_class->get_preferred_width_for_height = terminal_content_paned_measure_width;
+  widget_class->size_allocate = terminal_content_paned_size_allocate;
+}
+
+static void
+sidebar_position_changed_cb (TerminalContentPaned *content,
+                             GParamSpec *pspec,
+                             TerminalWindow *window)
+{
+  GSettings *settings;
+  int width;
+
+  /* Native pointer and keyboard moves run outside size allocation. A clamp
+   * must not change the saved preference, nor may a lock disable the paned
+   * (and with it the terminals in its second child). */
+  if (content->allocating)
+    return;
+
+  width = gtk_paned_get_position (GTK_PANED (content));
+  if (width == content->sidebar_width)
+    return;
+
+  settings = terminal_app_get_global_settings (terminal_app_get ());
+  if (!g_settings_set_int (settings, TERMINAL_SETTING_PROJECT_SIDEBAR_WIDTH_KEY, width))
+    return;
+
+  content->sidebar_width = width;
+  gtk_widget_queue_resize (GTK_WIDGET (content));
+  terminal_window_update_geometry (window);
+}
+
+static void
+sidebar_visibility_changed_cb (GtkWidget *sidebar,
+                               GParamSpec *pspec,
+                               TerminalWindow *window)
+{
+  terminal_window_update_geometry (window);
+}
+
 static void
 terminal_window_init (TerminalWindow *window)
 {
@@ -2191,14 +2325,17 @@ terminal_window_init (TerminalWindow *window)
                       G_CALLBACK (handle_tab_droped_on_desktop), window);
   }
 
-  GtkWidget *content = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
+  GtkWidget *content = g_object_new (terminal_content_paned_get_type (),
+                                     "orientation", GTK_ORIENTATION_HORIZONTAL,
+                                     NULL);
   GtkWidget *sidebar = terminal_project_sidebar_new (window, priv->mdi_container);
 
   gtk_paned_pack1 (GTK_PANED (content), sidebar, FALSE, FALSE);
   gtk_paned_pack2 (GTK_PANED (content), GTK_WIDGET (priv->mdi_container), TRUE, FALSE);
-  g_settings_bind (terminal_app_get_global_settings (app),
-                   TERMINAL_SETTING_PROJECT_SIDEBAR_WIDTH_KEY, content, "position",
-                   G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET | G_SETTINGS_BIND_GET_NO_CHANGES);
+  g_signal_connect (content, "notify::position",
+                    G_CALLBACK (sidebar_position_changed_cb), window);
+  g_signal_connect (sidebar, "notify::visible",
+                    G_CALLBACK (sidebar_visibility_changed_cb), window);
   gtk_box_pack_end (GTK_BOX (priv->main_vbox), content, TRUE, TRUE, 0);
   gtk_widget_show (content);
   gtk_widget_show (GTK_WIDGET (priv->mdi_container));
@@ -2221,6 +2358,7 @@ terminal_window_init (TerminalWindow *window)
                                    window);
 
   g_simple_action_set_enabled (lookup_action (window, "leave-fullscreen"), FALSE);
+  g_simple_action_set_enabled (lookup_action (window, "size-to"), FALSE);
 
   GSettings *global_settings = terminal_app_get_global_settings (app);
   enable_mnemonics_changed_cb (global_settings, TERMINAL_SETTING_ENABLE_MNEMONICS_KEY, window);
@@ -2802,6 +2940,7 @@ mdi_screen_switched_cb (TerminalMdiContainer *container,
 
   if (screen == NULL) {
     priv->active_screen = NULL;
+    g_simple_action_set_enabled (lookup_action (window, "size-to"), FALSE);
     return;
   }
 
@@ -2825,6 +2964,8 @@ mdi_screen_switched_cb (TerminalMdiContainer *container,
   }
 
   priv->active_screen = screen;
+  g_simple_action_set_enabled (lookup_action (window, "size-to"),
+                               terminal_notebook_get_peer (screen) == NULL);
 
   /* Override menubar setting if it wasn't restored from session */
   if (priv->use_default_menubar_visibility)

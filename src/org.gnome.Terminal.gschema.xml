@@ -118,7 +118,7 @@
       <description>Human-readable name of the profile.</description>
     </key>
     <key name="bold-color" type="s">
-      <default>'#000000'</default>
+      <default>'#eeeeec'</default>
       <summary>Default color of bold text in the terminal</summary>
       <description>Default color of bold text in the terminal, as a color specification (can be HTML-style hex digits, or a color name such as “red”). This is ignored if bold-color-same-as-fg is true.</description>
     </key>

@@ -309,6 +309,7 @@ handle_activate_result_cb (TerminalSearchProvider2  *skeleton,
     goto out;
 
   terminal_window_switch_screen (TERMINAL_WINDOW (toplevel), screen);
+  gtk_widget_grab_focus (GTK_WIDGET (screen));
   gtk_window_present_with_time (GTK_WINDOW (toplevel), timestamp);
   _terminal_debug_print (TERMINAL_DEBUG_SEARCH, "ActivateResult: %s\n", identifier);
 

@@ -152,7 +152,8 @@ static KeyEntry search_entries[] = {
   ENTRY (N_("Find Next"),       KEY_FIND_NEXT,  "find-forward",  NULL, NULL),
   ENTRY (N_("Find Previous"),   KEY_FIND_PREV,  "find-backward", NULL, NULL),
   ENTRY (N_("Clear Highlight"), KEY_FIND_CLEAR, "find-clear",    NULL, NULL),
-  ENTRY (N_("Search Projects"), KEY_FIND_PROJECT, "find-project", NULL, NULL)
+  /* When the sidebar is hidden, leave this shortcut available to the terminal. */
+  ENTRY_FULL (N_("Search Projects"), KEY_FIND_PROJECT, "find-project", NULL, NULL, NULL)
 };
 
 static KeyEntry view_entries[] = {
@@ -279,11 +280,15 @@ key_changed_cb (GSettings *settings,
 
   gs_free char *value = g_settings_get_string (settings, settings_key);
 
-  gs_free char *detailed = g_action_print_detailed_name (key_entry->action_name,
-                                                         key_entry->parameter);
-  gs_unref_variant GVariant *shadow_parameter = g_variant_new_string (detailed);
+  gs_unref_variant GVariant *shadow_parameter = NULL;
 
-  /* We want to always consume the action's accelerators, even if the corresponding
+  if (key_entry->shadow_action_name != NULL) {
+    gs_free char *detailed = g_action_print_detailed_name (key_entry->action_name,
+                                                           key_entry->parameter);
+    shadow_parameter = g_variant_new_string (detailed);
+  }
+
+  /* For actions with a shadow, we always consume the accelerators, even if the corresponding
    * action is insensitive, so the corresponding shortcut key escape code isn't sent
    * to the terminal. See bug #453193, bug #138609, and bug #559728.
    * Since GtkApplication's accelerators don't use GtkAccelGroup, we have no way
@@ -296,18 +301,20 @@ key_changed_cb (GSettings *settings,
     gtk_application_remove_accelerator (application,
                                         key_entry->action_name,
                                         key_entry->parameter);
-    gtk_application_remove_accelerator (application,
-                                        key_entry->shadow_action_name,
-                                        shadow_parameter);
+    if (shadow_parameter != NULL)
+      gtk_application_remove_accelerator (application,
+                                          key_entry->shadow_action_name,
+                                          shadow_parameter);
   } else {
     gtk_application_add_accelerator (application,
                                      value,
                                      key_entry->action_name,
                                      key_entry->parameter);
-    gtk_application_add_accelerator (application,
-                                     value,
-                                     key_entry->shadow_action_name,
-                                     shadow_parameter);
+    if (shadow_parameter != NULL)
+      gtk_application_add_accelerator (application,
+                                       value,
+                                       key_entry->shadow_action_name,
+                                       shadow_parameter);
   }
 }
 

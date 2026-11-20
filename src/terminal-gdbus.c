@@ -476,8 +476,8 @@ terminal_factory_impl_create_instance (TerminalFactory *factory,
 
   /* Apply window properties */
   gboolean active;
-  if (g_variant_lookup (options, "active", "b", &active) &&
-      active) {
+  if (have_new_window ||
+      (g_variant_lookup (options, "active", "b", &active) && active)) {
     terminal_window_switch_screen (window, screen);
     gtk_widget_grab_focus (GTK_WIDGET (screen));
   }

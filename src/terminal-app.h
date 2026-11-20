@@ -70,6 +70,12 @@ void terminal_app_remove_profile (TerminalApp *app,
 TerminalWindow * terminal_app_new_window   (TerminalApp *app,
                                             int monitor);
 
+typedef enum {
+  TERMINAL_NEW_TERMINAL_DEFAULT = 0,
+  TERMINAL_NEW_TERMINAL_SPLIT = 1 << 0,
+  TERMINAL_NEW_TERMINAL_PROJECT = 1 << 1
+} TerminalNewTerminalFlags;
+
 TerminalScreen *terminal_app_new_terminal (TerminalApp     *app,
                                            TerminalWindow  *window,
                                            GSettings       *profile,
@@ -79,7 +85,7 @@ TerminalScreen *terminal_app_new_terminal (TerminalApp     *app,
                                            const char      *working_dir,
                                            char           **child_env,
                                            double           zoom,
-                                           gboolean         split);
+                                           TerminalNewTerminalFlags flags);
 
 char *terminal_app_dup_screen_object_path (TerminalApp *app,
                                            TerminalScreen *screen);

@@ -117,6 +117,9 @@ terminal_client_append_exec_options (GVariantBuilder *builder,
   gs_strfreev char **envv;
 
   envv = g_get_environ ();
+  if (g_environ_getenv (envv, TERMINAL_PORTABLE_ENV_ROOT) != NULL)
+    envv = terminal_portable_restore_host_environment (envv);
+
   envv = g_environ_unsetenv (envv, "COLORTERM");
   envv = g_environ_unsetenv (envv, "COLUMNS");
   envv = g_environ_unsetenv (envv, "DESKTOP_STARTUP_ID");

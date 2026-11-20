@@ -927,7 +927,7 @@ terminal_app_new_terminal (TerminalApp     *app,
                            const char      *working_dir,
                            char           **child_env,
                            double           zoom,
-                           gboolean         split)
+                           TerminalNewTerminalFlags flags)
 {
   TerminalScreen *screen;
 
@@ -937,10 +937,14 @@ terminal_app_new_terminal (TerminalApp     *app,
 
   screen = terminal_screen_new (profile, charset, override_command, title,
                                 working_dir, child_env, zoom);
+  if (flags & TERMINAL_NEW_TERMINAL_PROJECT)
+    terminal_screen_set_project_launch (screen, override_command != NULL);
 
-  if (split) {
+  if (flags & TERMINAL_NEW_TERMINAL_SPLIT) {
     TerminalScreen *peer = terminal_screen_new (profile, charset, NULL, NULL,
                                                 working_dir, child_env, zoom);
+    if (flags & TERMINAL_NEW_TERMINAL_PROJECT)
+      terminal_screen_set_project_launch (peer, FALSE);
     terminal_notebook_add_split (TERMINAL_NOTEBOOK (terminal_window_get_mdi_container (window)),
                                  screen, peer);
     _terminal_screen_launch_child_on_idle (peer);
