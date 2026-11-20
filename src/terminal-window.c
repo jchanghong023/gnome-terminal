@@ -406,7 +406,7 @@ action_new_terminal_cb (GSimpleAction *action,
                              new_working_directory != NULL ? new_working_directory
                                                            : terminal_screen_get_initial_directory (priv->active_screen),
                              terminal_screen_get_initial_environment (priv->active_screen),
-                             1.0);
+                             1.0, FALSE);
 
   if (mode == TERMINAL_NEW_TERMINAL_MODE_WINDOW)
     gtk_window_present (GTK_WINDOW (window));
@@ -923,14 +923,22 @@ action_tab_detach_cb (GSimpleAction *action,
 
   screen = priv->active_screen;
 
-  terminal_screen_get_size (screen, &width, &height);
-  g_snprintf (geometry, sizeof (geometry), "%dx%d", width, height);
+  gboolean split = terminal_notebook_get_peer (screen) != NULL;
+  if (split)
+    gtk_window_get_size (GTK_WINDOW (window), &width, &height);
+  else {
+    terminal_screen_get_size (screen, &width, &height);
+    g_snprintf (geometry, sizeof (geometry), "%dx%d", width, height);
+  }
 
   new_window = terminal_app_new_window (app, 0);
 
   terminal_window_move_screen (window, new_window, screen, -1);
 
-  terminal_window_parse_geometry (new_window, geometry);
+  if (split)
+    gtk_window_set_default_size (GTK_WINDOW (new_window), width, height);
+  else
+    terminal_window_parse_geometry (new_window, geometry);
 
   gtk_window_present_with_time (GTK_WINDOW (new_window), gtk_get_current_event_time ());
 }
@@ -1578,6 +1586,11 @@ screen_resize_window_cb (TerminalScreen *screen,
   TerminalWindowPrivate *priv = window->priv;
   GtkWidget *widget = GTK_WIDGET (screen);
 
+  /* A child cannot resize its half independently of the other pane. */
+  if (terminal_notebook_get_peer (screen) != NULL ||
+      terminal_notebook_get_peer (priv->active_screen) != NULL)
+    return;
+
   if (gtk_widget_get_realized (widget) &&
       (gdk_window_get_state (gtk_widget_get_window (widget)) & (GDK_WINDOW_STATE_MAXIMIZED |
                                                                 GDK_WINDOW_STATE_FULLSCREEN |
@@ -1848,7 +1861,8 @@ static void
 screen_close_cb (TerminalScreen *screen,
                  TerminalWindow *window)
 {
-  terminal_window_remove_screen (window, screen);
+  if (terminal_notebook_get_peer (screen) == NULL)
+    terminal_window_remove_screen (window, screen);
 }
 
 static void
@@ -1861,11 +1875,10 @@ notebook_update_tabs_menu_cb (GtkMenuButton *button,
   int i;
 
   menu = g_menu_new ();
-  tabs = terminal_window_list_screen_containers (window);
+  tabs = terminal_mdi_container_list_tab_screens (window->priv->mdi_container);
 
   for (t = tabs, i = 0; t != NULL; t = t->next, i++) {
-    TerminalScreenContainer *container = t->data;
-    TerminalScreen *screen = terminal_screen_container_get_screen (container);
+    TerminalScreen *screen = t->data;
     gs_unref_object GMenuItem *item;
     const char *title;
 
@@ -1880,6 +1893,15 @@ notebook_update_tabs_menu_cb (GtkMenuButton *button,
 
   /* Need this so the menu is positioned correctly */
   gtk_widget_set_halign (GTK_WIDGET (gtk_menu_button_get_popup (button)), GTK_ALIGN_END);
+}
+
+static void
+window_set_focus_cb (GtkWindow *window,
+                     GtkWidget *focus,
+                     TerminalNotebook *notebook)
+{
+  if (TERMINAL_IS_SCREEN (focus))
+    terminal_notebook_focus_screen (notebook, TERMINAL_SCREEN (focus));
 }
 
 static void
@@ -2150,6 +2172,9 @@ terminal_window_init (TerminalWindow *window)
                           G_CALLBACK (mdi_screen_removed_cb), window);
   g_signal_connect_after (priv->mdi_container, "screens-reordered",
                           G_CALLBACK (mdi_screens_reordered_cb), window);
+  g_signal_connect_object (window, "set-focus",
+                           G_CALLBACK (window_set_focus_cb),
+                           priv->mdi_container, G_CONNECT_AFTER);
 
   g_signal_connect_swapped (priv->mdi_container, "notify::tab-pos",
                             G_CALLBACK (terminal_window_update_geometry), window);
@@ -2549,15 +2574,10 @@ terminal_window_add_screen (TerminalWindow *window,
   GtkWidget *old_window;
 
   old_window = gtk_widget_get_toplevel (GTK_WIDGET (screen));
-  if (gtk_widget_is_toplevel (old_window) &&
-      TERMINAL_IS_WINDOW (old_window) &&
-      TERMINAL_WINDOW (old_window)== window)
-    return;  
-
   if (TERMINAL_IS_WINDOW (old_window))
-    terminal_window_remove_screen (TERMINAL_WINDOW (old_window), screen);
-
-  terminal_mdi_container_add_screen (priv->mdi_container, screen);
+    terminal_window_move_screen (TERMINAL_WINDOW (old_window), window, screen, position);
+  else
+    terminal_mdi_container_add_screen (priv->mdi_container, screen);
 }
 
 void
@@ -2575,33 +2595,15 @@ terminal_window_move_screen (TerminalWindow *source_window,
                              TerminalScreen *screen,
                              int dest_position)
 {
-  TerminalScreenContainer *screen_container;
-
   g_return_if_fail (TERMINAL_IS_WINDOW (source_window));
   g_return_if_fail (TERMINAL_IS_WINDOW (dest_window));
   g_return_if_fail (TERMINAL_IS_SCREEN (screen));
   g_return_if_fail (gtk_widget_get_toplevel (GTK_WIDGET (screen)) == GTK_WIDGET (source_window));
   g_return_if_fail (dest_position >= -1);
 
-  screen_container = terminal_screen_container_get_from_screen (screen);
-  g_assert (TERMINAL_IS_SCREEN_CONTAINER (screen_container));
-
-  /* We have to ref the screen container as well as the screen,
-   * because otherwise removing the screen container from the source
-   * window's notebook will cause the container and its containing
-   * screen to be gtk_widget_destroy()ed!
-   */
-  g_object_ref_sink (screen_container);
-  g_object_ref_sink (screen);
-  terminal_window_remove_screen (source_window, screen);
-
-  /* Now we can safely remove the screen from the container and let the container die */
-  gtk_container_remove (GTK_CONTAINER (gtk_widget_get_parent (GTK_WIDGET (screen))), GTK_WIDGET (screen));
-  g_object_unref (screen_container);
-
-  terminal_window_add_screen (dest_window, screen, dest_position);
-  terminal_mdi_container_set_active_screen (dest_window->priv->mdi_container, screen);
-  g_object_unref (screen);
+  terminal_notebook_move_tab (TERMINAL_NOTEBOOK (source_window->priv->mdi_container),
+                              TERMINAL_NOTEBOOK (dest_window->priv->mdi_container),
+                              screen, dest_position);
 }
 
 GList*
@@ -2659,6 +2661,14 @@ terminal_window_update_size (TerminalWindow *window)
   int grid_width, grid_height;
   int pixel_width, pixel_height;
   GdkWindow *gdk_window;
+
+  if (priv->active_screen == NULL)
+    return;
+
+  if (terminal_notebook_get_peer (priv->active_screen) != NULL) {
+    terminal_window_update_geometry (window);
+    return;
+  }
 
   gdk_window = gtk_widget_get_window (GTK_WIDGET (window));
 
@@ -2790,7 +2800,12 @@ mdi_screen_switched_cb (TerminalMdiContainer *container,
   if (priv->disposed)
     return;
 
-  if (screen == NULL || old_active_screen == screen)
+  if (screen == NULL) {
+    priv->active_screen = NULL;
+    return;
+  }
+
+  if (old_active_screen == screen)
     return;
 
   if (priv->search_popover != NULL)
@@ -2800,7 +2815,9 @@ mdi_screen_switched_cb (TerminalMdiContainer *container,
                          "[window %p] MDI: setting active tab to screen %p (old active screen %p)\n",
                          window, screen, priv->active_screen);
 
-  if (old_active_screen != NULL && screen != NULL) {
+  gboolean single_to_single = terminal_notebook_get_peer (old_active_screen) == NULL &&
+                              terminal_notebook_get_peer (screen) == NULL;
+  if (old_active_screen != NULL && single_to_single) {
     terminal_screen_get_size (old_active_screen, &old_grid_width, &old_grid_height);
 
     /* This is so that we maintain the same grid */
@@ -2823,11 +2840,10 @@ mdi_screen_switched_cb (TerminalMdiContainer *container,
   sync_screen_icon_title (screen, NULL, window);
   sync_screen_title (screen, NULL, window);
 
-  /* set size of window to current grid size */
-  _terminal_debug_print (TERMINAL_DEBUG_GEOMETRY,
-                         "[window %p] setting size after flipping notebook pages\n",
-                         window);
-  terminal_window_update_size (window);
+  if (single_to_single)
+    terminal_window_update_size (window);
+  else if (old_active_screen != terminal_notebook_get_peer (screen))
+    terminal_window_update_geometry (window);
 
   terminal_window_update_tabs_actions_sensitivity (window);
   terminal_window_update_encoding_menu_active_encoding (window);
@@ -2886,6 +2902,9 @@ mdi_screen_added_cb (TerminalMdiContainer *container,
 
   g_signal_connect (screen, "close-screen",
                     G_CALLBACK (screen_close_cb), window);
+
+  if (screen != terminal_notebook_get_tab_screen (screen))
+    return;
 
   terminal_window_update_tabs_actions_sensitivity (window);
   terminal_window_update_search_sensitivity (screen, window);
@@ -2982,6 +3001,9 @@ mdi_screen_removed_cb (TerminalMdiContainer *container,
                                         G_CALLBACK (screen_close_cb),
                                         window);
 
+  if (screen != terminal_notebook_get_tab_screen (screen))
+    return;
+
   /* We already got a switch-page signal whose handler sets the active tab to the
    * new active tab, unless this screen was the only one in the notebook, so
    * priv->active_tab is valid here.
@@ -3005,7 +3027,8 @@ mdi_screen_removed_cb (TerminalMdiContainer *container,
       TerminalScreen *active_screen = terminal_mdi_container_get_active_screen (container);
       gtk_widget_grab_focus (GTK_WIDGET(active_screen));  /* bug 742422 */
 
-      terminal_window_update_size (window);
+      if (terminal_notebook_get_peer (screen) == NULL)
+        terminal_window_update_size (window);
     }
 }
 
@@ -3071,6 +3094,13 @@ terminal_window_update_geometry (TerminalWindow *window)
 
   if (priv->active_screen == NULL)
     return;
+
+  if (terminal_notebook_get_peer (priv->active_screen) != NULL) {
+    /* No common character grid: let GTK size the two equal-width panes. */
+    gtk_window_set_geometry_hints (GTK_WINDOW (window), NULL, NULL, 0);
+    priv->old_geometry_widget = NULL;
+    return;
+  }
 
   widget = GTK_WIDGET (priv->active_screen);
 
@@ -3234,6 +3264,7 @@ confirm_close_window_or_tab (TerminalWindow *window,
   GtkWidget *dialog;
   gboolean do_confirm;
   int n_tabs;
+  gboolean split_tab = FALSE;
 
   if (priv->confirm_close_dialog)
     {
@@ -3249,7 +3280,10 @@ confirm_close_window_or_tab (TerminalWindow *window,
 
   if (screen)
     {
-      do_confirm = terminal_screen_has_foreground_process (screen, NULL, NULL);
+      TerminalScreen *peer = terminal_notebook_get_peer (screen);
+      split_tab = peer != NULL;
+      do_confirm = terminal_screen_has_foreground_process (screen, NULL, NULL) ||
+                   (peer && terminal_screen_has_foreground_process (peer, NULL, NULL));
       n_tabs = 1;
     }
   else
@@ -3259,7 +3293,8 @@ confirm_close_window_or_tab (TerminalWindow *window,
       do_confirm = FALSE;
 
       tabs = terminal_window_list_screen_containers (window);
-      n_tabs = g_list_length (tabs);
+      n_tabs = terminal_mdi_container_get_n_screens (priv->mdi_container);
+      split_tab = n_tabs == 1 && tabs != NULL && tabs->next != NULL;
 
       for (t = tabs; t != NULL; t = t->next)
         {
@@ -3283,12 +3318,17 @@ confirm_close_window_or_tab (TerminalWindow *window,
                             GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
                             GTK_MESSAGE_WARNING,
                             GTK_BUTTONS_CANCEL,
-                            "%s", n_tabs > 1 ? _("Close this window?") : _("Close this terminal?"));
+                            "%s", n_tabs > 1 ? _("Close this window?") :
+                                  split_tab ? _("Close both terminals?") : _("Close this terminal?"));
 
   if (n_tabs > 1)
     gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
                                               "%s", _("There are still processes running in some terminals in this window. "
                                                       "Closing the window will kill all of them."));
+  else if (split_tab)
+    gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
+                                              "%s", _("A terminal in this tab still has a running process. "
+                                                      "Closing both terminals will end any running processes in the tab."));
   else
     gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
                                               "%s", _("There is still a process running in this terminal. "
@@ -3296,7 +3336,8 @@ confirm_close_window_or_tab (TerminalWindow *window,
 
   gtk_window_set_title (GTK_WINDOW (dialog), ""); 
 
-  gtk_dialog_add_button (GTK_DIALOG (dialog), n_tabs > 1 ? _("C_lose Window") : _("C_lose Terminal"), GTK_RESPONSE_ACCEPT);
+  gtk_dialog_add_button (GTK_DIALOG (dialog), n_tabs > 1 ? _("C_lose Window") :
+                         split_tab ? _("C_lose Both Terminals") : _("C_lose Terminal"), GTK_RESPONSE_ACCEPT);
   gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
 
   gtk_dialog_set_alternative_button_order (GTK_DIALOG (dialog),

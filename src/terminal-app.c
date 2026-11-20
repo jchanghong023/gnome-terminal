@@ -34,6 +34,7 @@
 #include "terminal-accels.h"
 #include "terminal-screen.h"
 #include "terminal-screen-container.h"
+#include "terminal-notebook.h"
 #include "terminal-window.h"
 #include "terminal-profiles-list.h"
 #include "terminal-util.h"
@@ -925,7 +926,8 @@ terminal_app_new_terminal (TerminalApp     *app,
                            const char      *title,
                            const char      *working_dir,
                            char           **child_env,
-                           double           zoom)
+                           double           zoom,
+                           gboolean         split)
 {
   TerminalScreen *screen;
 
@@ -936,7 +938,15 @@ terminal_app_new_terminal (TerminalApp     *app,
   screen = terminal_screen_new (profile, charset, override_command, title,
                                 working_dir, child_env, zoom);
 
-  terminal_window_add_screen (window, screen, -1);
+  if (split) {
+    TerminalScreen *peer = terminal_screen_new (profile, charset, NULL, NULL,
+                                                working_dir, child_env, zoom);
+    terminal_notebook_add_split (TERMINAL_NOTEBOOK (terminal_window_get_mdi_container (window)),
+                                 screen, peer);
+    _terminal_screen_launch_child_on_idle (peer);
+  } else {
+    terminal_window_add_screen (window, screen, -1);
+  }
   terminal_window_switch_screen (window, screen);
   gtk_widget_grab_focus (GTK_WIDGET (screen));
 

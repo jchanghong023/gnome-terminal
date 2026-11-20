@@ -135,11 +135,11 @@ terminal_mdi_container_set_active_screen (TerminalMdiContainer *container,
 
 
 GList *
-terminal_mdi_container_list_screens (TerminalMdiContainer *container)
+terminal_mdi_container_list_tab_screens (TerminalMdiContainer *container)
 {
   g_return_val_if_fail (TERMINAL_IS_MDI_CONTAINER (container), NULL);
 
-  return TERMINAL_MDI_CONTAINER_GET_IFACE (container)->list_screens (container);
+  return TERMINAL_MDI_CONTAINER_GET_IFACE (container)->list_tab_screens (container);
 }
 
 GList *

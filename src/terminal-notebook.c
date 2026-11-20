@@ -37,6 +37,7 @@
 struct _TerminalNotebookPrivate
 {
   TerminalScreen *active_screen;
+  gboolean switching_page;
   GtkPolicyType policy;
 };
 
@@ -130,41 +131,173 @@ remove_reorder_bindings (GtkBindingSet    *binding_set,
   gtk_binding_entry_skip (binding_set, keypad_keysym, GDK_MOD1_MASK);
 }
 
+/* Single-terminal pages are screen containers; split pages are homogeneous
+ * boxes holding two screen containers. The first screen identifies the tab. */
+static GtkWidget *
+page_for_screen (TerminalScreen *screen)
+{
+  GtkWidget *container = GTK_WIDGET (terminal_screen_container_get_from_screen (screen));
+  GtkWidget *parent = container ? gtk_widget_get_parent (container) : NULL;
+
+  return GTK_IS_BOX (parent) ? parent : container;
+}
+
+TerminalScreen *
+terminal_notebook_get_page_screen (GtkWidget *page)
+{
+  if (GTK_IS_BOX (page))
+    return g_object_get_data (G_OBJECT (page), "split-left");
+
+  return TERMINAL_IS_SCREEN_CONTAINER (page) ?
+         terminal_screen_container_get_screen (TERMINAL_SCREEN_CONTAINER (page)) : NULL;
+}
+
+static TerminalScreen *
+split_right (GtkWidget *page)
+{
+  return GTK_IS_BOX (page) ? g_object_get_data (G_OBJECT (page), "split-right") : NULL;
+}
+
+TerminalScreen *
+terminal_notebook_get_tab_screen (TerminalScreen *screen)
+{
+  return screen ? terminal_notebook_get_page_screen (page_for_screen (screen)) : NULL;
+}
+
+TerminalScreen *
+terminal_notebook_get_peer (TerminalScreen *screen)
+{
+  GtkWidget *page = page_for_screen (screen);
+  TerminalScreen *right = split_right (page);
+
+  if (right == NULL)
+    return NULL;
+
+  return screen == right ? terminal_notebook_get_page_screen (page) : right;
+}
+
+static void
+set_active_screen (TerminalNotebook *notebook,
+                   TerminalScreen *screen)
+{
+  TerminalScreen *old_screen = notebook->priv->active_screen;
+
+  if (screen == old_screen)
+    return;
+
+  notebook->priv->active_screen = screen;
+  g_signal_emit_by_name (notebook, "screen-switched", old_screen, screen);
+  g_object_notify (G_OBJECT (notebook), "active-screen");
+}
+
+void
+terminal_notebook_focus_screen (TerminalNotebook *notebook,
+                                TerminalScreen *screen)
+{
+  GtkNotebook *gtk_notebook = GTK_NOTEBOOK (notebook);
+
+  int position = gtk_notebook_get_current_page (gtk_notebook);
+
+  if (!notebook->priv->switching_page && position >= 0 &&
+      page_for_screen (screen) == gtk_notebook_get_nth_page (gtk_notebook, position))
+    set_active_screen (notebook, screen);
+}
+
+static void
+set_page_screens_visible (GtkWidget *page,
+                          gboolean visible)
+{
+  TerminalScreen *left = terminal_notebook_get_page_screen (page);
+  TerminalScreen *right = split_right (page);
+
+  if (left)
+    gtk_widget_set_visible (GTK_WIDGET (left), visible);
+  if (right)
+    gtk_widget_set_visible (GTK_WIDGET (right), visible);
+}
+
+static void
+insert_page (TerminalNotebook *notebook,
+             GtkWidget *page,
+             GtkWidget *tab_label,
+             int position)
+{
+  GtkNotebook *gtk_notebook = GTK_NOTEBOOK (notebook);
+
+  update_tab_visibility (notebook, +1);
+  gtk_notebook_insert_page (gtk_notebook, page, tab_label, position);
+  gtk_container_child_set (GTK_CONTAINER (notebook), page,
+                           "tab-expand", TRUE,
+                           "tab-fill", TRUE,
+                           NULL);
+  gtk_notebook_set_tab_reorderable (gtk_notebook, page, TRUE);
+}
+
+static void
+add_tab (TerminalNotebook *notebook,
+         TerminalScreen *left,
+         TerminalScreen *right)
+{
+  GtkWidget *page = terminal_screen_container_new (left);
+  GtkWidget *tab_label = terminal_tab_label_new (left);
+
+  if (right != NULL) {
+    GtkWidget *split = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 1);
+    GtkWidget *right_container = terminal_screen_container_new (right);
+
+    gtk_box_set_homogeneous (GTK_BOX (split), TRUE);
+    gtk_box_pack_start (GTK_BOX (split), page, TRUE, TRUE, 0);
+    gtk_box_pack_start (GTK_BOX (split), right_container, TRUE, TRUE, 0);
+    gtk_widget_show (page);
+    gtk_widget_show (right_container);
+    g_object_set_data (G_OBJECT (split), "split-left", left);
+    g_object_set_data (G_OBJECT (split), "split-right", right);
+    page = split;
+  }
+
+  gtk_widget_show (page);
+  g_signal_connect (tab_label, "close-button-clicked",
+                    G_CALLBACK (close_button_clicked_cb), NULL);
+  insert_page (notebook, page, tab_label, -1);
+}
+
+void
+terminal_notebook_add_split (TerminalNotebook *notebook,
+                             TerminalScreen *left,
+                             TerminalScreen *right)
+{
+  add_tab (notebook, left, right);
+}
+
+void
+terminal_notebook_move_tab (TerminalNotebook *source,
+                            TerminalNotebook *dest,
+                            TerminalScreen *screen,
+                            int dest_position)
+{
+  if (source == dest)
+    return;
+
+  GtkWidget *page = page_for_screen (screen);
+  GtkWidget *tab_label = gtk_notebook_get_tab_label (GTK_NOTEBOOK (source), page);
+
+  g_object_ref (page);
+  g_object_ref (tab_label);
+  terminal_mdi_container_remove_screen (TERMINAL_MDI_CONTAINER (source), screen);
+  insert_page (dest, page, tab_label, dest_position);
+  terminal_mdi_container_set_active_screen (TERMINAL_MDI_CONTAINER (dest), screen);
+  gtk_widget_grab_focus (GTK_WIDGET (screen));
+  g_object_unref (tab_label);
+  g_object_unref (page);
+}
+
 /* TerminalMdiContainer impl */
 
 static void
 terminal_notebook_add_screen (TerminalMdiContainer *container,
                               TerminalScreen *screen)
 {
-  TerminalNotebook *notebook = TERMINAL_NOTEBOOK (container);
-  GtkNotebook *gtk_notebook = GTK_NOTEBOOK (notebook);
-  GtkWidget *screen_container, *tab_label;
-  const int position = -1;
-
-  g_warn_if_fail (gtk_widget_get_parent (GTK_WIDGET (screen)) == NULL);
-
-  screen_container = terminal_screen_container_new (screen);
-  gtk_widget_show (screen_container);
-
-  update_tab_visibility (notebook, +1);
-
-  tab_label = terminal_tab_label_new (screen);
-  g_signal_connect (tab_label, "close-button-clicked",
-                    G_CALLBACK (close_button_clicked_cb), NULL);
-
-  gtk_notebook_insert_page (gtk_notebook,
-                            screen_container,
-                            tab_label,
-                            position);
-  gtk_container_child_set (GTK_CONTAINER (notebook),
-                           screen_container,
-                           "tab-expand", TRUE,
-                           "tab-fill", TRUE,
-                           NULL);
-  gtk_notebook_set_tab_reorderable (gtk_notebook, screen_container, TRUE);
-#if 0
-  gtk_notebook_set_tab_detachable (gtk_notebook, screen_container, TRUE);
-#endif
+  add_tab (TERMINAL_NOTEBOOK (container), screen, NULL);
 }
 
 static void
@@ -172,26 +305,18 @@ terminal_notebook_remove_screen (TerminalMdiContainer *container,
                                  TerminalScreen *screen)
 {
   TerminalNotebook *notebook = TERMINAL_NOTEBOOK (container);
-  TerminalScreenContainer *screen_container;
 
   g_warn_if_fail (gtk_widget_is_ancestor (GTK_WIDGET (screen), GTK_WIDGET (notebook)));
 
   update_tab_visibility (notebook, -1);
 
-  screen_container = terminal_screen_container_get_from_screen (screen);
-  gtk_container_remove (GTK_CONTAINER (notebook),
-                        GTK_WIDGET (screen_container));
+  gtk_container_remove (GTK_CONTAINER (notebook), page_for_screen (screen));
 }
 
 static TerminalScreen *
 terminal_notebook_get_active_screen (TerminalMdiContainer *container)
 {
-  TerminalNotebook *notebook = TERMINAL_NOTEBOOK (container);
-  GtkNotebook *gtk_notebook = GTK_NOTEBOOK (notebook);
-  GtkWidget *widget;
-
-  widget = gtk_notebook_get_nth_page (gtk_notebook, gtk_notebook_get_current_page (gtk_notebook));
-  return terminal_screen_container_get_screen (TERMINAL_SCREEN_CONTAINER (widget));
+  return TERMINAL_NOTEBOOK (container)->priv->active_screen;
 }
 
 static void
@@ -200,31 +325,41 @@ terminal_notebook_set_active_screen (TerminalMdiContainer *container,
 {
   TerminalNotebook *notebook = TERMINAL_NOTEBOOK (container);
   GtkNotebook *gtk_notebook = GTK_NOTEBOOK (notebook);
-  TerminalScreenContainer *screen_container;
-  GtkWidget *widget;
+  int position = gtk_notebook_page_num (gtk_notebook, page_for_screen (screen));
 
-  screen_container = terminal_screen_container_get_from_screen (screen);
-  widget = GTK_WIDGET (screen_container);
+  if (position < 0)
+    return;
 
-  gtk_notebook_set_current_page (gtk_notebook,
-                                 gtk_notebook_page_num (gtk_notebook, widget));
+  gtk_notebook_set_current_page (gtk_notebook, position);
+  set_active_screen (notebook, screen);
 }
 
 static GList *
 terminal_notebook_list_screen_containers (TerminalMdiContainer *container)
 {
-  /* We are trusting that GtkNotebook will return pages in order */
-  return gtk_container_get_children (GTK_CONTAINER (container));
+  GList *containers = NULL;
+  int n_pages = gtk_notebook_get_n_pages (GTK_NOTEBOOK (container));
+
+  for (int i = n_pages - 1; i >= 0; i--) {
+    GtkWidget *page = gtk_notebook_get_nth_page (GTK_NOTEBOOK (container), i);
+    TerminalScreen *right = split_right (page);
+    if (right)
+      containers = g_list_prepend (containers, terminal_screen_container_get_from_screen (right));
+    containers = g_list_prepend (containers,
+                                 terminal_screen_container_get_from_screen (terminal_notebook_get_page_screen (page)));
+  }
+
+  return containers;
 }
 
 static GList *
-terminal_notebook_list_screens (TerminalMdiContainer *container)
+terminal_notebook_list_tab_screens (TerminalMdiContainer *container)
 {
   GList *list, *l;
 
-  list = terminal_notebook_list_screen_containers (container);
+  list = gtk_container_get_children (GTK_CONTAINER (container));
   for (l = list; l != NULL; l = l->next)
-    l->data = terminal_screen_container_get_screen ((TerminalScreenContainer *) l->data);
+    l->data = terminal_notebook_get_page_screen (l->data);
 
   return list;
 }
@@ -261,7 +396,7 @@ terminal_notebook_reorder_screen (TerminalMdiContainer *container,
 
   g_return_if_fail (new_position == 1 || new_position == -1);
 
-  child = GTK_WIDGET (terminal_screen_container_get_from_screen (screen));
+  child = page_for_screen (screen);
   n = gtk_notebook_get_n_pages (notebook);
   pos = gtk_notebook_page_num (notebook, child);
 
@@ -277,7 +412,7 @@ terminal_notebook_mdi_iface_init (TerminalMdiContainerInterface *iface)
   iface->remove_screen = terminal_notebook_remove_screen;
   iface->get_active_screen = terminal_notebook_get_active_screen;
   iface->set_active_screen = terminal_notebook_set_active_screen;
-  iface->list_screens = terminal_notebook_list_screens;
+  iface->list_tab_screens = terminal_notebook_list_tab_screens;
   iface->list_screen_containers = terminal_notebook_list_screen_containers;
   iface->get_n_screens = terminal_notebook_get_n_screens;
   iface->get_active_screen_num = terminal_notebook_get_active_screen_num;
@@ -297,35 +432,26 @@ terminal_notebook_switch_page (GtkNotebook     *gtk_notebook,
 {
   TerminalNotebook *notebook = TERMINAL_NOTEBOOK (gtk_notebook);
   TerminalNotebookPrivate *priv = notebook->priv;
-  TerminalScreen *screen, *old_active_screen;
+  TerminalScreen *old_screen = priv->active_screen;
+  GtkWidget *old_page = old_screen ? page_for_screen (old_screen) : NULL;
+  GtkWidget *toplevel = gtk_widget_get_toplevel (GTK_WIDGET (notebook));
+  TerminalScreen *screen = terminal_notebook_get_page_screen (child);
 
+  priv->switching_page = TRUE;
+  set_page_screens_visible (child, TRUE);
   GTK_NOTEBOOK_CLASS (terminal_notebook_parent_class)->switch_page (gtk_notebook, child, page_num);
 
-  screen = terminal_screen_container_get_screen (TERMINAL_SCREEN_CONTAINER (child));
+  /* Hidden terminals should not contribute to the notebook's size request. */
+  if (old_page != child)
+    set_page_screens_visible (old_page, FALSE);
 
-  old_active_screen = priv->active_screen;
-  if (screen == old_active_screen)
-    return;
-
-  /* Workaround to remove gtknotebook's feature of computing its size based on
-   * all pages. When the widget is hidden, its size will not be taken into
-   * account.
-   * FIXME!
-   */
-//   if (old_active_screen)
-//     gtk_widget_hide (GTK_WIDGET (terminal_screen_container_get_from_screen (old_active_screen)));
-  /* Make sure that the widget is no longer hidden due to the workaround */
-//   if (child)
-//     gtk_widget_show (child);
-  if (old_active_screen)
-    gtk_widget_hide (GTK_WIDGET (old_active_screen));
-  if (screen)
-    gtk_widget_show (GTK_WIDGET (screen));
-
-  priv->active_screen = screen;
-
-  g_signal_emit_by_name (notebook, "screen-switched", old_active_screen, screen);
-  g_object_notify (G_OBJECT (notebook), "active-screen");
+  if (GTK_IS_WINDOW (toplevel)) {
+    GtkWidget *focus = gtk_window_get_focus (GTK_WINDOW (toplevel));
+    if (TERMINAL_IS_SCREEN (focus) && page_for_screen (TERMINAL_SCREEN (focus)) == child)
+      screen = TERMINAL_SCREEN (focus);
+  }
+  priv->switching_page = FALSE;
+  set_active_screen (notebook, screen);
 }
 
 static void
@@ -342,7 +468,9 @@ terminal_notebook_page_added (GtkNotebook     *gtk_notebook,
 
   update_tab_visibility (notebook, 0);
   g_signal_emit_by_name (gtk_notebook, "screen-added",
-                         terminal_screen_container_get_screen (TERMINAL_SCREEN_CONTAINER (child)));
+                         terminal_notebook_get_page_screen (child));
+  if (split_right (child))
+    g_signal_emit_by_name (gtk_notebook, "screen-added", split_right (child));
 }
 
 static void
@@ -358,8 +486,14 @@ terminal_notebook_page_removed (GtkNotebook     *gtk_notebook,
     page_removed (gtk_notebook, child, page_num);
 
   update_tab_visibility (notebook, 0);
+  if (gtk_notebook_get_n_pages (gtk_notebook) == 0)
+    set_active_screen (TERMINAL_NOTEBOOK (gtk_notebook), NULL);
+
+  /* The last removal may destroy the window; disconnect the peer first. */
+  if (split_right (child))
+    g_signal_emit_by_name (gtk_notebook, "screen-removed", split_right (child));
   g_signal_emit_by_name (gtk_notebook, "screen-removed",
-                         terminal_screen_container_get_screen (TERMINAL_SCREEN_CONTAINER (child)));
+                         terminal_notebook_get_page_screen (child));
 }
 
 static void
@@ -393,7 +527,8 @@ terminal_notebook_grab_focus (GtkWidget *widget)
   TerminalScreen *screen;
 
   screen = terminal_mdi_container_get_active_screen (TERMINAL_MDI_CONTAINER (widget));
-  gtk_widget_grab_focus (GTK_WIDGET (screen));
+  if (screen)
+    gtk_widget_grab_focus (GTK_WIDGET (screen));
 }
 
 /* Tab scrolling was removed from GtkNotebook in gtk 3, so reimplement it here */

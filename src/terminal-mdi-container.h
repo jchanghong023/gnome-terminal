@@ -43,7 +43,7 @@ struct _TerminalMdiContainerInterface {
   TerminalScreen *      (* get_active_screen)       (TerminalMdiContainer *container);
   void                  (* set_active_screen)       (TerminalMdiContainer *container,
                                                      TerminalScreen *screen);
-  GList *               (* list_screens)            (TerminalMdiContainer *container);
+  GList *               (* list_tab_screens)        (TerminalMdiContainer *container);
   GList *               (* list_screen_containers)  (TerminalMdiContainer *container);
   int                   (* get_n_screens)           (TerminalMdiContainer *container);
   int                   (* get_active_screen_num)   (TerminalMdiContainer *container);
@@ -82,7 +82,8 @@ void terminal_mdi_container_set_active_screen (TerminalMdiContainer *container,
 void terminal_mdi_container_set_active_screen_num (TerminalMdiContainer *container,
                                                    int position);
 
-GList *terminal_mdi_container_list_screens (TerminalMdiContainer *container);
+/* The first screen represents each tab; the container list includes both panes. */
+GList *terminal_mdi_container_list_tab_screens (TerminalMdiContainer *container);
 
 GList *terminal_mdi_container_list_screen_containers (TerminalMdiContainer *container);
 

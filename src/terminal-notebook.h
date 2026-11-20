@@ -20,6 +20,8 @@
 
 #include <gtk/gtk.h>
 
+#include "terminal-screen.h"
+
 G_BEGIN_DECLS
 
 #define TERMINAL_TYPE_NOTEBOOK         (terminal_notebook_get_type ())
@@ -49,6 +51,20 @@ struct _TerminalNotebookClass
 GType terminal_notebook_get_type (void);
 
 GtkWidget *terminal_notebook_new (void);
+
+void terminal_notebook_add_split (TerminalNotebook *notebook,
+                                 TerminalScreen *left,
+                                 TerminalScreen *right);
+void terminal_notebook_move_tab (TerminalNotebook *source,
+                                TerminalNotebook *dest,
+                                TerminalScreen *screen,
+                                int dest_position);
+void terminal_notebook_focus_screen (TerminalNotebook *notebook,
+                                    TerminalScreen *screen);
+
+TerminalScreen *terminal_notebook_get_page_screen (GtkWidget *page);
+TerminalScreen *terminal_notebook_get_tab_screen (TerminalScreen *screen);
+TerminalScreen *terminal_notebook_get_peer (TerminalScreen *screen);
 
 void terminal_notebook_set_tab_policy (TerminalNotebook *notebook,
                                        GtkPolicyType policy);

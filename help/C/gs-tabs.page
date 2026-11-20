@@ -31,8 +31,8 @@
 
   <title>Use tabs</title>
 
-  <p>By default, <app>Terminal</app> lists sessions in the left sidebar, one
-  title per row. Click a title to switch to that terminal. Drag the divider to
+  <p>By default, <app>Terminal</app> lists tabs in the left sidebar, one
+  title per row. Click a title to switch to that tab. Drag the divider to
   resize the sidebar. Its width is saved for new windows.</p>
 
   <p>Type a project name in <gui>Search projects</gui> at the top of the
@@ -47,19 +47,32 @@
   <p>Use <gui>Add Working Directory…</gui> to choose a project directory,
   or click <gui>Add Current Directory</gui> next to it to save the active
   terminal's current local directory. Neither action opens a tab.
-  The <gui>+</gui> button next to a project opens a terminal in its
-  directory.</p>
+  Each project has two add buttons. <gui>New terminal in this project</gui>
+  opens a single terminal. <gui>New split terminal tab in this project</gui>
+  (the plus with a split icon) opens two independent terminals side by side,
+  each taking half the available width. Both start in the project's
+  directory and share one sidebar row.</p>
+
+  <p>In a split tab, click either pane to direct typing and terminal
+  shortcuts to it. Closing the tab closes both terminals. If one shell
+  exits and its profile would normally close the terminal, that pane shows
+  its exit status instead; the other terminal keeps running.</p>
 
   <p>Use <gui>Project options</gui> to change or remove a project directory,
   or to move a project up or down. Existing terminals stay open. The
   project order and collapsed state are saved between launches, but open
   terminals are not restored by the sidebar.</p>
 
+  <p>Choose <gui>Open in Neovim</gui> from <gui>Project options</gui> to
+  open the project directory in Neovim in a new tab. Neovim opens its
+  built-in terminal in a bottom split, ready for input. The command
+  requires <cmd>nvim</cmd> on the executable search path.</p>
+
   <p>Tabs are grouped under the most specific saved project that contains
   their starting directory. Changing directory inside a terminal does
   not move its tab. Click a project name to collapse or expand its tabs.
   The highlighted project contains the active terminal, even when collapsed.
-  The number next to each project counts its open terminals.</p>
+  The number next to each project counts its open tabs.</p>
 
   <p>To cycle through tabs in the active tab's project, use
   <keyseq><key>Alt</key><key>Page Up</key></keyseq> or

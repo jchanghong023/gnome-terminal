@@ -78,7 +78,8 @@ TerminalScreen *terminal_app_new_terminal (TerminalApp     *app,
                                            const char      *title,
                                            const char      *working_dir,
                                            char           **child_env,
-                                           double           zoom);
+                                           double           zoom,
+                                           gboolean         split);
 
 char *terminal_app_dup_screen_object_path (TerminalApp *app,
                                            TerminalScreen *screen);

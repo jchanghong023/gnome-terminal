@@ -53,6 +53,7 @@
 #include "terminal-enums.h"
 #include "terminal-intl.h"
 #include "terminal-marshal.h"
+#include "terminal-notebook.h"
 #include "terminal-schemas.h"
 #include "terminal-screen-container.h"
 #include "terminal-util.h"
@@ -1433,7 +1434,8 @@ terminal_screen_do_exec (TerminalScreen *screen,
   profile = priv->profile;
 
   if (priv->initial_working_directory &&
-      !g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY))
+      (priv->override_command != NULL ||
+       !g_settings_get_boolean (profile, TERMINAL_PROFILE_USE_CUSTOM_COMMAND_KEY)))
     working_dir = priv->initial_working_directory;
   else
     working_dir = g_get_home_dir ();
@@ -1573,6 +1575,9 @@ terminal_screen_button_press (GtkWidget      *widget,
   guint state;
 
   state = event->state & gtk_accelerator_get_default_mod_mask ();
+
+  if (event->type == GDK_BUTTON_PRESS && terminal_notebook_get_peer (screen) != NULL)
+    gtk_widget_grab_focus (widget);
 
   hyperlink = terminal_screen_check_hyperlink (screen, (GdkEvent*)event);
   url = terminal_screen_check_match (screen, (GdkEvent*)event, &url_flavor);
@@ -1728,6 +1733,10 @@ terminal_screen_child_exited (VteTerminal *terminal,
   priv->child_pid = -1;
   
   action = g_settings_get_enum (priv->profile, TERMINAL_PROFILE_EXIT_ACTION_KEY);
+
+  /* Shell exit isn't a request to close the other shell in the same tab. */
+  if (action == TERMINAL_EXIT_CLOSE && terminal_notebook_get_peer (screen) != NULL)
+    action = TERMINAL_EXIT_HOLD;
   
   switch (action)
     {
@@ -1909,8 +1918,7 @@ terminal_screen_drag_data_received (GtkWidget        *widget,
         if (!GTK_IS_WIDGET (container))
           return;
 
-        moving_screen = terminal_screen_container_get_screen (TERMINAL_SCREEN_CONTAINER (container));
-        g_warn_if_fail (TERMINAL_IS_SCREEN (moving_screen));
+        moving_screen = terminal_notebook_get_page_screen (container);
         if (!TERMINAL_IS_SCREEN (moving_screen))
           return;
 

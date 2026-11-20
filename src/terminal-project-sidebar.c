@@ -7,6 +7,7 @@
 
 #include "terminal-app.h"
 #include "terminal-libgsystem.h"
+#include "terminal-notebook.h"
 #include "terminal-project-sidebar.h"
 #include "terminal-schemas.h"
 
@@ -105,15 +106,24 @@ new_label (const char *text)
 }
 
 static GtkWidget *
-new_icon_button (const char *icon,
-                 const char *name)
+new_button_with_image (GtkWidget *image,
+                       const char *name)
 {
-  GtkWidget *button = gtk_button_new_from_icon_name (icon, GTK_ICON_SIZE_MENU);
+  GtkWidget *button = gtk_button_new ();
+
+  gtk_button_set_image (GTK_BUTTON (button), image);
 
   gtk_button_set_relief (GTK_BUTTON (button), GTK_RELIEF_NONE);
   gtk_widget_set_tooltip_text (button, name);
   atk_object_set_name (gtk_widget_get_accessible (button), name);
   return button;
+}
+
+static GtkWidget *
+new_icon_button (const char *icon,
+                 const char *name)
+{
+  return new_button_with_image (gtk_image_new_from_icon_name (icon, GTK_ICON_SIZE_MENU), name);
 }
 
 static gboolean
@@ -223,8 +233,9 @@ toggle_project (GtkButton *button,
 }
 
 static void
-open_project_terminal (GtkButton *button,
-                       GtkListBoxRow *row)
+open_project_tab (GtkListBoxRow *row,
+                  char **command,
+                  gboolean split)
 {
   ProjectSidebar *sidebar = get_sidebar (get_row_list (row));
   const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
@@ -243,9 +254,28 @@ open_project_terminal (GtkButton *button,
   TerminalScreen *active = terminal_mdi_container_get_active_screen (sidebar->container);
 
   set_project_collapsed (sidebar, uri, FALSE);
-  terminal_app_new_terminal (app, sidebar->window, profile, NULL, NULL, NULL, path,
+  terminal_app_new_terminal (app, sidebar->window, profile, NULL, command, NULL, path,
                              active ? terminal_screen_get_initial_environment (active) : NULL,
-                             1.0);
+                             1.0, split);
+}
+
+static void
+open_project_terminal (GtkButton *button,
+                       GtkListBoxRow *row)
+{
+  open_project_tab (row, NULL, GPOINTER_TO_INT (g_object_get_data (G_OBJECT (button), "split-tab")));
+}
+
+static void
+open_project_neovim (GtkMenuItem *item,
+                     GtkListBoxRow *row)
+{
+  char *command[] = {
+    (char *) "nvim", (char *) "+botright split", (char *) "+terminal",
+    (char *) "+startinsert", (char *) ".", NULL
+  };
+
+  open_project_tab (row, command, FALSE);
 }
 
 static void
@@ -303,6 +333,7 @@ new_project_menu (GtkListBoxRow *row,
 {
   GtkWidget *button = gtk_menu_button_new ();
   GtkWidget *menu = gtk_menu_new ();
+  GtkWidget *neovim = gtk_menu_item_new_with_mnemonic (_("Open in _Neovim"));
   GtkWidget *change = gtk_menu_item_new_with_mnemonic (_("_Change Directory…"));
   GtkWidget *up = gtk_menu_item_new_with_mnemonic (_("Move Project _Up"));
   GtkWidget *down = gtk_menu_item_new_with_mnemonic (_("Move Project _Down"));
@@ -319,8 +350,11 @@ new_project_menu (GtkListBoxRow *row,
   g_object_set_data (G_OBJECT (down), "move-project-direction", GINT_TO_POINTER (1));
   g_signal_connect_object (up, "activate", G_CALLBACK (move_project), row, 0);
   g_signal_connect_object (down, "activate", G_CALLBACK (move_project), row, 0);
+  g_signal_connect_object (neovim, "activate", G_CALLBACK (open_project_neovim), row, 0);
   g_signal_connect_object (change, "activate", G_CALLBACK (change_project_directory), row, 0);
   g_signal_connect_object (remove, "activate", G_CALLBACK (remove_project), row, 0);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), neovim);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), gtk_separator_menu_item_new ());
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), change);
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), up);
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), down);
@@ -356,6 +390,10 @@ new_group_row (GtkListBox *list,
     gs_free char *title = path ? g_filename_display_basename (path) : g_file_get_parse_name (directory);
     gs_free char *detail = g_file_get_parse_name (directory);
     GtkWidget *button = new_icon_button ("list-add-symbolic", _("New terminal in this project"));
+    GtkWidget *split;
+    GtkWidget *split_icon = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
+    GtkWidget *plus = gtk_image_new_from_icon_name ("list-add-symbolic", GTK_ICON_SIZE_MENU);
+    GtkWidget *panes = gtk_image_new_from_icon_name ("view-dual-symbolic", GTK_ICON_SIZE_MENU);
     GtkWidget *toggle = gtk_button_new ();
     GtkWidget *heading = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
     GtkWidget *icon = gtk_image_new ();
@@ -380,12 +418,19 @@ new_group_row (GtkListBox *list,
     gtk_box_pack_start (GTK_BOX (heading), label, TRUE, TRUE, 0);
     gtk_container_add (GTK_CONTAINER (toggle), heading);
     gtk_box_pack_start (GTK_BOX (box), toggle, TRUE, TRUE, 0);
+    gtk_box_pack_start (GTK_BOX (split_icon), plus, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (split_icon), panes, FALSE, FALSE, 0);
+    gtk_widget_show_all (split_icon);
+    split = new_button_with_image (split_icon, _("New split terminal tab in this project"));
+    g_object_set_data (G_OBJECT (split), "split-tab", GINT_TO_POINTER (TRUE));
     g_signal_connect (button, "clicked", G_CALLBACK (open_project_terminal), row);
+    g_signal_connect (split, "clicked", G_CALLBACK (open_project_terminal), row);
     gtk_style_context_add_class (gtk_widget_get_style_context (count), "dim-label");
     gtk_widget_set_margin_start (count, 4);
-    gtk_widget_set_tooltip_text (count, _("Open terminals"));
+    gtk_widget_set_tooltip_text (count, _("Open tabs"));
     gtk_box_pack_start (GTK_BOX (box), count, FALSE, FALSE, 0);
     gtk_box_pack_end (GTK_BOX (box), menu, FALSE, FALSE, 0);
+    gtk_box_pack_end (GTK_BOX (box), split, FALSE, FALSE, 0);
     gtk_box_pack_end (GTK_BOX (box), button, FALSE, FALSE, 0);
   } else {
     label = new_label (_("Other Terminals"));
@@ -517,6 +562,7 @@ find_terminal_row (GtkListBox *list,
 {
   GtkListBoxRow *row;
 
+  screen = terminal_notebook_get_tab_screen (screen);
   if (screen != NULL)
     for (int i = 0; (row = gtk_list_box_get_row_at_index (list, i)) != NULL; i++)
       if (g_object_get_data (G_OBJECT (row), SCREEN_KEY) == screen)
@@ -547,7 +593,7 @@ rebuild_rows (GtkListBox *list)
   gs_unref_hashtable GHashTable *tails = g_hash_table_new_full (g_file_hash,
                                                              (GEqualFunc) g_file_equal,
                                                              g_object_unref, NULL);
-  gs_free_list GList *screens = terminal_mdi_container_list_screens (sidebar->container);
+  gs_free_list GList *screens = terminal_mdi_container_list_tab_screens (sidebar->container);
   GList *l;
   char **project;
   gboolean has_other = FALSE;
@@ -618,6 +664,9 @@ screen_added (TerminalMdiContainer *container,
               TerminalScreen *screen,
               GtkListBox *list)
 {
+  if (screen != terminal_notebook_get_tab_screen (screen))
+    return;
+
   g_signal_connect_object (screen, "initial-directory-changed",
                            G_CALLBACK (rebuild_rows), list, G_CONNECT_SWAPPED);
   rebuild_rows (list);
@@ -628,6 +677,9 @@ screen_removed (TerminalMdiContainer *container,
                 TerminalScreen *screen,
                 GtkListBox *list)
 {
+  if (screen != terminal_notebook_get_tab_screen (screen))
+    return;
+
   g_signal_handlers_disconnect_by_func (screen, G_CALLBACK (rebuild_rows), list);
   rebuild_rows (list);
 }
@@ -661,7 +713,8 @@ action_set_title (GSimpleAction *action,
 {
   ProjectSidebar *sidebar = get_sidebar (user_data);
 
-  rename_tab (sidebar->window, terminal_mdi_container_get_active_screen (sidebar->container));
+  rename_tab (sidebar->window,
+              terminal_notebook_get_tab_screen (terminal_mdi_container_get_active_screen (sidebar->container)));
 }
 
 static GtkListBoxRow *
