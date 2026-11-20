@@ -94,6 +94,17 @@ void terminal_screen_set_startup_ssh (TerminalScreen *screen,
                                       const char *credential);
 void terminal_screen_keep_startup_ssh (TerminalScreen *screen);
 
+/* Includes configured reopen intent and panes displaying a managed SSH child. */
+gboolean terminal_screen_has_remote_session (TerminalScreen *screen);
+/* Latest OSC 7 directory for this managed SSH target; transfer full. */
+char *terminal_screen_dup_remote_directory (TerminalScreen *screen);
+const char *terminal_screen_get_startup_ssh_directory (TerminalScreen *screen);
+void terminal_screen_set_startup_ssh_directory (TerminalScreen *screen,
+                                                const char *directory);
+const char *terminal_screen_get_ssh_login_command (TerminalScreen *screen);
+void terminal_screen_set_ssh_login_command (TerminalScreen *screen,
+                                             const char *command);
+
 gboolean terminal_screen_exec (TerminalScreen *screen,
                                char          **argv,
                                char          **envv,

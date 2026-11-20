@@ -6,9 +6,13 @@
 
 char **terminal_ssh_build_argv (const char *command,
                                 const char *credential,
+                                const char *remote_directory,
+                                const char *login_command,
                                 GError **error);
+gboolean terminal_ssh_command_accepts_remote_startup (const char *command);
 void terminal_ssh_configure (GtkWindow *parent,
                              TerminalScreen *screen);
 void terminal_ssh_forget_password (const char *credential);
+char *terminal_ssh_dup_password (const char *credential, GError **error);
 
 #endif

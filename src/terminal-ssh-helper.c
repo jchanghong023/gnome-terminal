@@ -52,26 +52,34 @@ clear_password (volatile char *password,
     *password++ = '\0';
 }
 
+static gboolean
+write_password (const char *credential,
+                const char *password,
+                gsize length)
+{
+  char *directory = g_build_filename (g_get_home_dir (), PASSWORD_DIRECTORY, NULL);
+  GStatBuf info;
+  gboolean stored = FALSE;
+
+  umask (0077);
+  if ((g_mkdir (directory, 0700) == 0 || errno == EEXIST) &&
+      g_lstat (directory, &info) == 0 && S_ISDIR (info.st_mode) &&
+      info.st_uid == geteuid () && (info.st_mode & 0077) == 0) {
+    char *path = g_build_filename (directory, credential, NULL);
+    stored = g_file_set_contents (path, password, length, NULL);
+    g_free (path);
+  }
+  g_free (directory);
+  return stored;
+}
+
 static int
 store_password (const char *credential)
 {
   char password[PASSWORD_LIMIT + 1];
   size_t length = fread (password, 1, sizeof password, stdin);
-  gboolean stored = FALSE;
-  if (!ferror (stdin) && password_valid (password, length)) {
-    char *directory = g_build_filename (g_get_home_dir (), PASSWORD_DIRECTORY, NULL);
-    GStatBuf info;
-
-    umask (0077);
-    if ((g_mkdir (directory, 0700) == 0 || errno == EEXIST) &&
-        g_lstat (directory, &info) == 0 && S_ISDIR (info.st_mode) &&
-        info.st_uid == geteuid () && (info.st_mode & 0077) == 0) {
-      char *path = g_build_filename (directory, credential, NULL);
-      stored = g_file_set_contents (path, password, length, NULL);
-      g_free (path);
-    }
-    g_free (directory);
-  }
+  gboolean stored = !ferror (stdin) && password_valid (password, length) &&
+                    write_password (credential, password, length);
   clear_password (password, sizeof password);
   return stored ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -85,20 +93,44 @@ forget_password (const char *credential)
   return removed ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-static gboolean
-send_saved_password (const char *credential)
+static char *
+read_saved_password (const char *credential,
+                     gsize *length)
 {
   char *path = g_build_filename (g_get_home_dir (), PASSWORD_DIRECTORY, credential, NULL);
   char *password = NULL;
-  gsize length;
-  gboolean sent = FALSE;
-  if (g_file_get_contents (path, &password, &length, NULL)) {
-    if (password_valid (password, length))
-      sent = puts (password) != EOF;
-    clear_password (password, length);
-    g_free (password);
+  if (g_file_get_contents (path, &password, length, NULL) && !password_valid (password, *length)) {
+    clear_password (password, *length);
+    g_clear_pointer (&password, g_free);
   }
   g_free (path);
+  return password;
+}
+
+static int
+copy_password (const char *credential,
+               const char *destination)
+{
+  gsize length;
+  char *password = read_saved_password (credential, &length);
+  if (password == NULL)
+    return EXIT_FAILURE;
+  gboolean stored = write_password (destination, password, length);
+  clear_password (password, length);
+  g_free (password);
+  return stored ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+static gboolean
+send_saved_password (const char *credential)
+{
+  gsize length;
+  char *password = read_saved_password (credential, &length);
+  if (password == NULL)
+    return FALSE;
+  gboolean sent = puts (password) != EOF;
+  clear_password (password, length);
+  g_free (password);
   return sent;
 }
 
@@ -285,6 +317,8 @@ main (int argc, char **argv)
     return store_password (argv[2]);
   if (argc == 3 && g_str_equal (argv[1], "--forget"))
     return forget_password (argv[2]);
+  if (argc == 4 && g_str_equal (argv[1], "--copy") && credential_valid (argv[3]))
+    return copy_password (argv[2], argv[3]);
   if (argc >= 5 && g_str_equal (argv[1], "--connect") && g_str_equal (argv[3], "ssh"))
     return connect_ssh (argc, argv);
   return EXIT_FAILURE;

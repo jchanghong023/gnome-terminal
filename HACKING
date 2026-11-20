@@ -34,7 +34,47 @@ mode 0600). Passwords previously saved to a keyring must be entered again.
 Do not put passwords in the command itself. Autofill only applies to standard
 SSH password authentication, not interactive challenges or jump hosts. An
 unknown host key requires confirmation; a changed host key blocks the connection.
-Reopening starts a new SSH session, not the previous remote shell or directory.
+
+Set Remote Directory to an absolute path on the SSH host, or leave it blank
+to use the remote home on first connection. When the remote shell reports
+its working directory via OSC 7, closing the window remembers the last
+reported directory. Without OSC 7, Terminal can only use the configured
+directory; it cannot read the remote working directory from the local SSH
+process.
+
+Command after Login runs once on the SSH host, after the directory change
+and before opening the interactive login shell. It uses the remote account's
+shell syntax. For example, `cd /work/project` changes the landing directory;
+exported environment variables also carry over. Do not include secrets in
+this command. Use a plain SSH connection command (for example,
+`ssh -p 2222 user@host`), without a trailing remote command, for either field.
+
+Add Current Directory in a managed SSH pane creates a remote project. If no
+OSC 7 directory has been reported, enter the absolute path when asked. The
+project's new-tab and split buttons reuse its SSH connection and run the
+saved login command, if set. Removing the project does not remove the
+original pane's password.
+
+For Bash on the remote host, the system VTE profile script can report
+directories when it is installed and enabled. On tcsh, if you want automatic
+tracking after `cd`, have the remote account's `precmd` alias invoke an OSC 7
+reporter before each prompt. For example, save this as `~/.vte-osc7` on the
+remote host and make it executable:
+
+    #!/bin/sh
+    exec python -c 'import os, socket, sys
+    try:
+        from urllib.parse import quote_from_bytes as quote
+    except ImportError:
+        from urllib import quote
+    path = os.getcwdb() if hasattr(os, "getcwdb") else os.getcwd()
+    sys.stdout.write("\033]7;file://" + socket.gethostname() + quote(path) + "\007")'
+
+In `~/.tcshrc` (or `~/.cshrc` if used by tcsh), set
+`alias precmd '$HOME/.vte-osc7'`, or add the reporter to your existing
+`precmd` alias. The app does not modify remote shell startup files.
+
+Reopening starts a fresh SSH session, not the previous remote shell.
 
 CentOS 7 portable build
 =======================

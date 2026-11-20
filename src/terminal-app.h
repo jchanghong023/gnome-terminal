@@ -93,6 +93,17 @@ TerminalScreen *terminal_app_new_terminal (TerminalApp     *app,
                                            double           zoom,
                                            TerminalNewTerminalFlags flags);
 
+gboolean terminal_app_open_ssh_project (TerminalApp *app,
+                                        TerminalWindow *window,
+                                        GSettings *profile,
+                                        char **child_env,
+                                        const char *command,
+                                        const char *credential,
+                                        const char *remote_directory,
+                                        const char *login_command,
+                                        gboolean split,
+                                        GError **error);
+
 char *terminal_app_dup_screen_object_path (TerminalApp *app,
                                            TerminalScreen *screen);
 

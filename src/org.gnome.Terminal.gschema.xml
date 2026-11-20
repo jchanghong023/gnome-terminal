@@ -733,6 +733,11 @@
       <summary>Manually added project directory URIs, in sidebar order</summary>
     </key>
 
+    <key name="remote-project-ssh" type="a{s(sss)}">
+      <default>{}</default>
+      <summary>OpenSSH commands, saved password file references and post-login commands by remote project URI</summary>
+    </key>
+
     <key name="project-sidebar-width" type="i">
       <default>268</default>
       <summary>Width of the project sidebar in pixels</summary>
@@ -751,6 +756,11 @@
     <key name="terminal-session-ssh" type="a((ss)(ss))">
       <default>[]</default>
       <summary>OpenSSH commands and saved password file references for terminal panes</summary>
+    </key>
+
+    <key name="terminal-session-ssh-startup" type="a((ays)(ays))">
+      <default>[]</default>
+      <summary>Remote working directories and post-login commands of SSH panes in the last closed terminal window</summary>
     </key>
 
    <!-- <child name="profiles" schema="org.gnome.Terminal.ProfilesList" /> -->

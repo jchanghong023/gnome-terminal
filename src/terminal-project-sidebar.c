@@ -10,8 +10,10 @@
 #include "terminal-notebook.h"
 #include "terminal-project-sidebar.h"
 #include "terminal-schemas.h"
+#include "terminal-ssh.h"
 
 #define PROJECT_TERMINAL_INDENT 76
+#define REMOTE_PROJECT_URI_PREFIX "ssh-project://"
 #define SCREEN_KEY "terminal-project-screen"
 #define DIRECTORY_KEY "terminal-project-directory"
 #define PROJECT_ROW_KEY "terminal-project-row"
@@ -31,9 +33,18 @@ typedef struct {
   char *search_query;
 } ProjectSidebar;
 
+typedef struct {
+  const char *command;
+  const char *credential;
+  const char *login_command;
+} SshProject;
+
 static void select_terminal (GtkListBox *list, TerminalScreen *screen);
 static void choose_directory (GtkListBox *list, const char *old_uri);
-static void update_project_directory (GtkListBox *list, const char *old_uri, GFile *directory);
+static gboolean update_project_directory (GtkListBox *list,
+                                          const char *old_uri,
+                                          const char *uri,
+                                          const SshProject *ssh);
 
 static void
 free_sidebar (gpointer data)
@@ -92,6 +103,36 @@ show_error (TerminalWindow *window,
     gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), "%s", detail);
   g_signal_connect_swapped (dialog, "response", G_CALLBACK (gtk_widget_destroy), dialog);
   gtk_widget_show (dialog);
+}
+
+static gboolean
+is_remote_project (const char *uri)
+{
+  return uri != NULL && g_str_has_prefix (uri, REMOTE_PROJECT_URI_PREFIX);
+}
+
+static char *
+remote_project_uri (const char *command,
+                    const char *path)
+{
+  if (command == NULL || *command == '\0' || path == NULL || path[0] != '/')
+    return NULL;
+
+  gs_free char *host = g_compute_checksum_for_string (G_CHECKSUM_SHA256, command, -1);
+  /* Match GFile’s parent URI escaping, including reserved path characters. */
+  gs_free char *escaped = g_uri_escape_string (path, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
+  gsize length = strlen (escaped);
+  while (length > 1 && escaped[length - 1] == '/')
+    escaped[--length] = '\0';
+  return g_strconcat (REMOTE_PROJECT_URI_PREFIX, host, escaped, NULL);
+}
+
+static char *
+dup_remote_project_path (const char *uri)
+{
+  const char *path = strchr (uri + sizeof REMOTE_PROJECT_URI_PREFIX - 1, '/');
+
+  return path != NULL ? g_uri_unescape_string (path, NULL) : NULL;
 }
 
 static void
@@ -249,10 +290,11 @@ open_project_tab (GtkListBoxRow *row,
 {
   ProjectSidebar *sidebar = get_sidebar (get_row_list (row));
   const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
-  gs_unref_object GFile *directory = g_file_new_for_uri (uri);
-  gs_free char *path = g_file_get_path (directory);
+  gboolean remote = is_remote_project (uri);
+  gs_unref_object GFile *directory = remote ? NULL : g_file_new_for_uri (uri);
+  gs_free char *path = remote ? dup_remote_project_path (uri) : g_file_get_path (directory);
 
-  if (path == NULL || !g_file_test (path, G_FILE_TEST_IS_DIR)) {
+  if (!remote && (path == NULL || !g_file_test (path, G_FILE_TEST_IS_DIR))) {
     gs_free char *name = g_file_get_parse_name (directory);
     show_error (sidebar->window, _("Working directory is unavailable"), name);
     return;
@@ -262,6 +304,31 @@ open_project_tab (GtkListBoxRow *row,
   gs_unref_object GSettings *profile =
     terminal_settings_list_ref_default_child (terminal_app_get_profiles_list (app));
   TerminalScreen *active = terminal_mdi_container_get_active_screen (sidebar->container);
+  char **environment = active != NULL ? terminal_screen_get_initial_environment (active) : NULL;
+
+  if (remote) {
+    gs_unref_variant GVariant *projects =
+      g_settings_get_value (sidebar->settings, TERMINAL_SETTING_REMOTE_PROJECTS_KEY);
+    gs_free_error GError *error = NULL;
+    const char *ssh_command, *credential, *login_command;
+
+    if (path == NULL ||
+        !g_variant_lookup (projects, uri, "(&s&s&s)", &ssh_command, &credential, &login_command) ||
+        *ssh_command == '\0') {
+      show_error (sidebar->window, _("Could not open the remote project"),
+                  _("The saved SSH project details are unavailable."));
+      return;
+    }
+
+    set_project_collapsed (sidebar, uri, FALSE);
+    if (!terminal_app_open_ssh_project (app, sidebar->window, profile, environment,
+                                        ssh_command, *credential != '\0' ? credential : NULL,
+                                        path, *login_command != '\0' ? login_command : NULL, split, &error))
+      show_error (sidebar->window, _("Could not open the remote project"),
+                  error != NULL ? error->message : NULL);
+    return;
+  }
+
   TerminalNewTerminalFlags flags = TERMINAL_NEW_TERMINAL_PROJECT;
 
   if (split)
@@ -269,8 +336,7 @@ open_project_tab (GtkListBoxRow *row,
 
   set_project_collapsed (sidebar, uri, FALSE);
   terminal_app_new_terminal (app, sidebar->window, profile, NULL, command, NULL, path,
-                             active ? terminal_screen_get_initial_environment (active) : NULL,
-                             1.0, flags);
+                             environment, 1.0, flags);
 }
 
 static void
@@ -303,7 +369,8 @@ static void
 remove_project (GtkMenuItem *item,
                 GtkListBoxRow *row)
 {
-  update_project_directory (get_row_list (row), g_object_get_data (G_OBJECT (row), DIRECTORY_KEY), NULL);
+  update_project_directory (get_row_list (row), g_object_get_data (G_OBJECT (row), DIRECTORY_KEY),
+                            NULL, NULL);
 }
 
 static gboolean
@@ -315,6 +382,63 @@ save_project_directories (ProjectSidebar *sidebar,
     return TRUE;
   show_error (sidebar->window, _("Could not save the project list"), NULL);
   return FALSE;
+}
+
+static gboolean
+save_remote_project_directories (ProjectSidebar *sidebar,
+                                 char **projects,
+                                 const char *old_uri,
+                                 const char *uri,
+                                 const SshProject *ssh)
+{
+  gs_free_error GError *error = NULL;
+  gs_free char *copy = ssh != NULL ? terminal_ssh_dup_password (ssh->credential, &error) : NULL;
+  if (error != NULL) {
+    show_error (sidebar->window, _("Could not save the remote project"), error->message);
+    return FALSE;
+  }
+
+  gs_unref_object GSettings *settings = g_settings_new (TERMINAL_SETTING_SCHEMA);
+  gs_unref_variant GVariant *remote_projects =
+    g_settings_get_value (settings, TERMINAL_SETTING_REMOTE_PROJECTS_KEY);
+  GVariantBuilder builder;
+  GVariantIter iter;
+  const char *key, *command, *credential, *login_command;
+  const char *removed_credential = NULL;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{s(sss)}"));
+  g_variant_iter_init (&iter, remote_projects);
+  while (g_variant_iter_next (&iter, "{&s(&s&s&s)}", &key, &command, &credential, &login_command)) {
+    if (g_strcmp0 (key, old_uri) == 0 || (ssh != NULL && g_str_equal (key, uri))) {
+      if (*credential != '\0')
+        removed_credential = credential;
+    } else {
+      g_variant_builder_add (&builder, "{s(sss)}", key, command, credential, login_command);
+    }
+  }
+  if (ssh != NULL)
+    g_variant_builder_add (&builder, "{s(sss)}", uri, ssh->command, copy != NULL ? copy : "",
+                           ssh->login_command != NULL ? ssh->login_command : "");
+
+  g_settings_delay (settings);
+  gboolean saved_order = g_settings_set_strv (settings, TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY,
+                                              (const char * const *) projects);
+  gboolean saved_ssh = g_settings_set_value (settings, TERMINAL_SETTING_REMOTE_PROJECTS_KEY,
+                                            g_variant_builder_end (&builder));
+  if (!saved_order || !saved_ssh) {
+    g_settings_revert (settings);
+    if (copy != NULL)
+      terminal_ssh_forget_password (copy);
+    show_error (sidebar->window, _("Could not save the remote project"), NULL);
+    return FALSE;
+  }
+
+  g_settings_apply (settings);
+  if (removed_credential != NULL) {
+    g_settings_sync ();
+    terminal_ssh_forget_password (removed_credential);
+  }
+  return TRUE;
 }
 
 static void
@@ -342,6 +466,7 @@ move_project (GtkMenuItem *item,
 
 static GtkWidget *
 new_project_menu (GtkListBoxRow *row,
+                  gboolean remote,
                   gboolean can_move_up,
                   gboolean can_move_down)
 {
@@ -358,6 +483,8 @@ new_project_menu (GtkListBoxRow *row,
   gtk_button_set_relief (GTK_BUTTON (button), GTK_RELIEF_NONE);
   gtk_widget_set_tooltip_text (button, _("Project options"));
   atk_object_set_name (gtk_widget_get_accessible (button), _("Project options"));
+  gtk_widget_set_sensitive (neovim, !remote);
+  gtk_widget_set_sensitive (change, !remote);
   gtk_widget_set_sensitive (up, can_move_up);
   gtk_widget_set_sensitive (down, can_move_down);
   g_object_set_data (G_OBJECT (up), "move-project-direction", GINT_TO_POINTER (-1));
@@ -382,6 +509,7 @@ new_project_menu (GtkListBoxRow *row,
 static GtkWidget *
 new_group_row (GtkListBox *list,
                const char *uri,
+               GVariant *remote_projects,
                gboolean can_move_up,
                gboolean can_move_down)
 {
@@ -401,10 +529,22 @@ new_group_row (GtkListBox *list,
   gtk_container_add (GTK_CONTAINER (row), box);
 
   if (uri != NULL) {
-    gs_unref_object GFile *directory = g_file_new_for_uri (uri);
-    gs_free char *path = g_file_get_path (directory);
-    gs_free char *title = path ? g_filename_display_basename (path) : g_file_get_parse_name (directory);
-    gs_free char *detail = g_file_get_parse_name (directory);
+    gboolean remote = is_remote_project (uri);
+    gs_unref_object GFile *directory = remote ? NULL : g_file_new_for_uri (uri);
+    gs_free char *path = remote ? dup_remote_project_path (uri) : g_file_get_path (directory);
+    gs_free char *title = NULL;
+    gs_free char *detail = NULL;
+    if (remote) {
+      const char *command, *credential, *login_command;
+      title = path != NULL ? g_filename_display_name (path) : g_strdup (_("Remote Project"));
+      if (g_variant_lookup (remote_projects, uri, "(&s&s&s)", &command, &credential, &login_command))
+        detail = g_strconcat (title, "\n", command, NULL);
+      else
+        detail = g_strdup (title);
+    } else {
+      title = path != NULL ? g_filename_display_basename (path) : g_file_get_parse_name (directory);
+      detail = g_file_get_parse_name (directory);
+    }
     GtkWidget *button = new_icon_button ("list-add-symbolic", _("New terminal in this project"));
     GtkWidget *split;
     GtkWidget *split_icon = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
@@ -415,7 +555,7 @@ new_group_row (GtkListBox *list,
     GtkWidget *icon = gtk_image_new ();
     GtkWidget *folder = gtk_image_new_from_icon_name ("folder-symbolic", GTK_ICON_SIZE_MENU);
     GtkWidget *count = gtk_label_new (NULL);
-    GtkWidget *menu = new_project_menu (GTK_LIST_BOX_ROW (row), can_move_up, can_move_down);
+    GtkWidget *menu = new_project_menu (GTK_LIST_BOX_ROW (row), remote, can_move_up, can_move_down);
 
     label = new_label (title);
     gtk_button_set_relief (GTK_BUTTON (toggle), GTK_RELIEF_NONE);
@@ -606,6 +746,8 @@ rebuild_rows (GtkListBox *list)
   ProjectSidebar *sidebar = get_sidebar (list);
   gs_strfreev char **projects = g_settings_get_strv (sidebar->settings,
                                                     TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY);
+  gs_unref_variant GVariant *remote_projects =
+    g_settings_get_value (sidebar->settings, TERMINAL_SETTING_REMOTE_PROJECTS_KEY);
   gs_unref_hashtable GHashTable *tails = g_hash_table_new_full (g_file_hash,
                                                              (GEqualFunc) g_file_equal,
                                                              g_object_unref, NULL);
@@ -618,19 +760,29 @@ rebuild_rows (GtkListBox *list)
   sidebar->search_target = NULL;
   gtk_container_foreach (GTK_CONTAINER (list), (GtkCallback) gtk_widget_destroy, NULL);
   for (project = projects; *project != NULL; project++) {
-    GtkWidget *row = new_group_row (list, *project, project != projects, project[1] != NULL);
+    GtkWidget *row = new_group_row (list, *project, remote_projects, project != projects, project[1] != NULL);
     gtk_list_box_insert (list, row, -1);
     g_hash_table_insert (tails, g_file_new_for_uri (*project), row);
   }
 
   for (l = screens; l != NULL; l = l->next) {
     TerminalScreen *screen = l->data;
-    const char *path = terminal_screen_get_initial_directory (screen);
+    gboolean remote = terminal_screen_has_remote_session (screen);
+    const char *path = remote ? terminal_screen_get_startup_ssh_directory (screen)
+                              : terminal_screen_get_initial_directory (screen);
     GtkListBoxRow *tail = NULL;
     gs_unref_object GFile *directory = NULL;
 
     if (path != NULL && *projects != NULL) {
-      directory = g_file_new_for_path (path);
+      if (remote) {
+        const char *credential;
+        const char *command = terminal_screen_get_startup_ssh (screen, &credential);
+        gs_free char *uri = remote_project_uri (command, path);
+        if (uri != NULL)
+          directory = g_file_new_for_uri (uri);
+      } else {
+        directory = g_file_new_for_path (path);
+      }
       while (directory != NULL) {
         GFile *parent;
 
@@ -651,7 +803,7 @@ rebuild_rows (GtkListBox *list)
       directory = NULL;
     } else {
       if (!has_other) {
-        gtk_list_box_insert (list, new_group_row (list, NULL, FALSE, FALSE), -1);
+        gtk_list_box_insert (list, new_group_row (list, NULL, NULL, FALSE, FALSE), -1);
         has_other = TRUE;
       }
       gtk_list_box_insert (list, row, -1);
@@ -674,6 +826,27 @@ rebuild_rows (GtkListBox *list)
 
   gtk_widget_show_all (GTK_WIDGET (list));
   select_terminal (list, terminal_mdi_container_get_active_screen (sidebar->container));
+}
+
+static gboolean
+project_settings_changed (GSettings *settings,
+                          const GQuark *keys,
+                          int n_keys,
+                          GtkListBox *list)
+{
+  GQuark order = g_quark_from_static_string (TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY);
+  GQuark remote = g_quark_from_static_string (TERMINAL_SETTING_REMOTE_PROJECTS_KEY);
+
+  if (keys == NULL)
+    rebuild_rows (list);
+  else
+    for (int i = 0; i < n_keys; i++)
+      if (keys[i] == order || keys[i] == remote) {
+        rebuild_rows (list);
+        break;
+      }
+
+  return FALSE;
 }
 
 static void
@@ -894,21 +1067,21 @@ action_switch_project_tab (GSimpleAction *action,
     activate_terminal (list, target, NULL);
 }
 
-static void
+static gboolean
 update_project_directory (GtkListBox *list,
                           const char *old_uri,
-                          GFile *directory)
+                          const char *uri,
+                          const SshProject *ssh)
 {
   ProjectSidebar *sidebar = get_sidebar (list);
   gs_strfreev char **projects = g_settings_get_strv (sidebar->settings,
                                                     TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY);
-  gs_free char *uri = directory != NULL ? g_file_get_uri (directory) : NULL;
   gs_free char *old_project = NULL;
   int index = -1;
   guint n;
 
   if (old_uri != NULL && g_strcmp0 (old_uri, uri) == 0)
-    return;
+    return TRUE;
 
   for (n = 0; projects[n] != NULL; n++) {
     if (g_strcmp0 (projects[n], old_uri) == 0)
@@ -916,29 +1089,31 @@ update_project_directory (GtkListBox *list,
     if (g_strcmp0 (projects[n], uri) == 0) {
       if (old_uri != NULL)
         show_error (sidebar->window, _("This directory is already a project"), NULL);
-      return;
+      return old_uri == NULL;
     }
   }
 
   if (old_uri == NULL) {
     projects = g_renew (char *, projects, n + 2);
-    projects[n] = uri;
-    uri = NULL;
+    projects[n] = g_strdup (uri);
     projects[n + 1] = NULL;
   } else if (index < 0) {
-    return;
+    return TRUE;
   } else {
     old_project = projects[index];
-    if (uri != NULL) {
-      projects[index] = uri;
-      uri = NULL;
-    } else
+    if (uri != NULL)
+      projects[index] = g_strdup (uri);
+    else
       for (guint i = index; i < n; i++)
         projects[i] = projects[i + 1];
   }
 
-  if (save_project_directories (sidebar, projects) && old_project != NULL)
+  gboolean saved = ssh != NULL || is_remote_project (old_project)
+    ? save_remote_project_directories (sidebar, projects, old_project, uri, ssh)
+    : save_project_directories (sidebar, projects);
+  if (saved && old_project != NULL)
     set_project_collapsed (sidebar, old_project, FALSE);
+  return saved;
 }
 
 static void
@@ -949,8 +1124,11 @@ choose_directory_response (GtkDialog *dialog,
   if (response == GTK_RESPONSE_ACCEPT) {
     gs_unref_object GFile *directory = gtk_file_chooser_get_file (GTK_FILE_CHOOSER (dialog));
 
-    if (directory != NULL)
-      update_project_directory (list, g_object_get_data (G_OBJECT (dialog), DIRECTORY_KEY), directory);
+    if (directory != NULL) {
+      gs_free char *uri = g_file_get_uri (directory);
+      update_project_directory (list, g_object_get_data (G_OBJECT (dialog), DIRECTORY_KEY),
+                                uri, NULL);
+    }
   }
   gtk_widget_destroy (GTK_WIDGET (dialog));
 }
@@ -987,12 +1165,131 @@ add_directory (GtkButton *button,
   choose_directory (list, NULL);
 }
 
+static gboolean
+add_remote_project (GtkListBox *list,
+                    const SshProject *ssh,
+                    const char *path)
+{
+  ProjectSidebar *sidebar = get_sidebar (list);
+  gs_free char *uri = remote_project_uri (ssh->command, path);
+  gs_free_error GError *error = NULL;
+  gs_strfreev char **argv =
+    terminal_ssh_build_argv (ssh->command, NULL, path, ssh->login_command, &error);
+
+  if (argv == NULL) {
+    show_error (sidebar->window, _("Could not save the remote project"),
+                error != NULL ? error->message : NULL);
+    return FALSE;
+  }
+
+  g_assert (uri != NULL);
+  return update_project_directory (list, NULL, uri, ssh);
+}
+
+static void
+choose_remote_directory_response (GtkDialog *dialog,
+                                  int response,
+                                  GtkListBox *list)
+{
+  if (response == GTK_RESPONSE_ACCEPT) {
+    GtkEntry *entry = g_object_get_data (G_OBJECT (dialog), "remote-directory-entry");
+    GVariant *connection = g_object_get_data (G_OBJECT (dialog), "remote-project-ssh");
+    const char *path = gtk_entry_get_text (entry);
+    SshProject ssh;
+
+    if (path[0] != '/') {
+      show_error (get_sidebar (list)->window, _("Enter an absolute remote directory"),
+                  _("The directory must start with a slash (/)."));
+      return;
+    }
+
+    g_variant_get (connection, "(&s&s&s)", &ssh.command, &ssh.credential, &ssh.login_command);
+    if (*ssh.credential == '\0')
+      ssh.credential = NULL;
+    if (*ssh.login_command == '\0')
+      ssh.login_command = NULL;
+    if (!add_remote_project (list, &ssh, path))
+      return;
+  }
+  gtk_widget_destroy (GTK_WIDGET (dialog));
+}
+
+static void
+choose_remote_directory (GtkListBox *list,
+                         const SshProject *ssh,
+                         const char *startup_path)
+{
+  ProjectSidebar *sidebar = get_sidebar (list);
+  GtkWidget *dialog = gtk_dialog_new_with_buttons (_("Add Remote Directory"),
+                                                   GTK_WINDOW (sidebar->window),
+                                                   GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                                   _("_Cancel"), GTK_RESPONSE_CANCEL,
+                                                   _("_Add"), GTK_RESPONSE_ACCEPT, NULL);
+  GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  gs_free char *text = g_strdup_printf (_("The remote shell has not reported its current directory.\nSSH command: %s"),
+                                       ssh->command);
+  GtkWidget *description = gtk_label_new (text);
+  GtkWidget *label = gtk_label_new_with_mnemonic (_("_Absolute directory:"));
+  GtkWidget *entry = gtk_entry_new ();
+
+  gtk_container_set_border_width (GTK_CONTAINER (box), 12);
+  align_label_start (description);
+  gtk_label_set_line_wrap (GTK_LABEL (description), TRUE);
+  align_label_start (label);
+  gtk_label_set_mnemonic_widget (GTK_LABEL (label), entry);
+  gtk_entry_set_activates_default (GTK_ENTRY (entry), TRUE);
+  if (startup_path != NULL && g_utf8_validate (startup_path, -1, NULL))
+    gtk_entry_set_text (GTK_ENTRY (entry), startup_path);
+  gtk_box_pack_start (GTK_BOX (box), description, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (box), label, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (box), entry, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (content), box, TRUE, TRUE, 0);
+  g_object_set_data (G_OBJECT (dialog), "remote-directory-entry", entry);
+  g_object_set_data_full (G_OBJECT (dialog), "remote-project-ssh",
+                          g_variant_ref_sink (g_variant_new ("(sss)", ssh->command,
+                                                            ssh->credential != NULL ? ssh->credential : "",
+                                                            ssh->login_command != NULL ? ssh->login_command : "")),
+                          (GDestroyNotify) g_variant_unref);
+  gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_ACCEPT);
+  g_signal_connect_object (dialog, "response", G_CALLBACK (choose_remote_directory_response), list, 0);
+  gtk_widget_show_all (box);
+  gtk_widget_grab_focus (entry);
+  gtk_window_present (GTK_WINDOW (dialog));
+}
+
+static void
+add_current_remote_directory (GtkListBox *list,
+                              TerminalScreen *screen)
+{
+  SshProject ssh;
+  ssh.command = terminal_screen_get_startup_ssh (screen, &ssh.credential);
+  ssh.login_command = terminal_screen_get_ssh_login_command (screen);
+  if (ssh.command == NULL || *ssh.command == '\0') {
+    show_error (get_sidebar (list)->window, _("Could not save the remote project"),
+                _("The SSH connection details are unavailable."));
+    return;
+  }
+
+  gs_free char *path = terminal_screen_dup_remote_directory (screen);
+  if (path != NULL && path[0] == '/')
+    add_remote_project (list, &ssh, path);
+  else
+    choose_remote_directory (list, &ssh, terminal_screen_get_startup_ssh_directory (screen));
+}
+
 static void
 add_current_directory (GtkButton *button,
                        GtkListBox *list)
 {
   ProjectSidebar *sidebar = get_sidebar (list);
   TerminalScreen *screen = terminal_mdi_container_get_active_screen (sidebar->container);
+
+  if (screen != NULL && terminal_screen_has_remote_session (screen)) {
+    add_current_remote_directory (list, screen);
+    return;
+  }
+
   gs_free char *path = screen != NULL ? terminal_screen_get_current_dir (screen) : NULL;
 
   if (path == NULL || !g_file_test (path, G_FILE_TEST_IS_DIR)) {
@@ -1001,7 +1298,8 @@ add_current_directory (GtkButton *button,
   }
 
   gs_unref_object GFile *directory = g_file_new_for_path (path);
-  update_project_directory (list, NULL, directory);
+  gs_free char *uri = g_file_get_uri (directory);
+  update_project_directory (list, NULL, uri, NULL);
 }
 
 static gboolean
@@ -1077,8 +1375,8 @@ terminal_project_sidebar_new (TerminalWindow *window,
                           g_action_map_lookup_action (G_ACTION_MAP (window), "find-project"),
                           "enabled", G_BINDING_SYNC_CREATE);
 
-  g_signal_connect_object (sidebar->settings, "changed::" TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY,
-                           G_CALLBACK (rebuild_rows), list, G_CONNECT_SWAPPED);
+  g_signal_connect_object (sidebar->settings, "change-event",
+                           G_CALLBACK (project_settings_changed), list, 0);
   g_signal_connect_object (sidebar->settings, "changed::" TERMINAL_SETTING_COLLAPSED_PROJECTS_KEY,
                            G_CALLBACK (update_collapsed_projects), list, G_CONNECT_SWAPPED);
   g_signal_connect_object (container, "screen-added", G_CALLBACK (screen_added), list, G_CONNECT_AFTER);

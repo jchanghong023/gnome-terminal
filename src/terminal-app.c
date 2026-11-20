@@ -45,6 +45,7 @@
 #include "terminal-gdbus.h"
 #include "terminal-defines.h"
 #include "terminal-prefs.h"
+#include "terminal-ssh.h"
 #include "terminal-libgsystem.h"
 
 #ifdef ENABLE_SEARCH_PROVIDER
@@ -945,6 +946,29 @@ append_session_ssh (GVariantBuilder *builder,
                         peer_command != NULL ? peer_command : "", peer_credential != NULL ? peer_credential : "");
 }
 
+static GVariant *
+session_ssh_startup (TerminalScreen *screen)
+{
+  if (screen == NULL)
+    return g_variant_new ("(^ays)", "", "");
+
+  gs_free char *reported = terminal_screen_dup_remote_directory (screen);
+  const char *directory = reported != NULL ? reported : terminal_screen_get_startup_ssh_directory (screen);
+  const char *login_command = terminal_screen_get_ssh_login_command (screen);
+
+  return g_variant_new ("(^ays)", directory != NULL ? directory : "",
+                        login_command != NULL ? login_command : "");
+}
+
+static void
+append_session_ssh_startup (GVariantBuilder *builder,
+                            TerminalScreen *screen,
+                            TerminalScreen *peer)
+{
+  g_variant_builder_add (builder, "(@(ays)@(ays))",
+                         session_ssh_startup (screen), session_ssh_startup (peer));
+}
+
 void
 terminal_app_save_session (TerminalApp *app,
                            TerminalWindow *window)
@@ -959,9 +983,10 @@ terminal_app_save_session (TerminalApp *app,
     return;
 
   /* Store byte strings for paths; an empty second path denotes a single pane. */
-  GVariantBuilder builder, ssh_builder;
+  GVariantBuilder builder, ssh_builder, ssh_startup_builder;
   g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(ayay)"));
   g_variant_builder_init (&ssh_builder, G_VARIANT_TYPE ("a((ss)(ss))"));
+  g_variant_builder_init (&ssh_startup_builder, G_VARIANT_TYPE ("a((ays)(ays))"));
   for (GList *l = tabs; l != NULL; l = l->next) {
     TerminalScreen *screen = l->data;
     TerminalScreen *peer = terminal_notebook_get_peer (screen);
@@ -970,6 +995,7 @@ terminal_app_save_session (TerminalApp *app,
     g_variant_builder_add (&builder, "(^ay^ay)", directory,
                           peer_directory != NULL ? peer_directory : "");
     append_session_ssh (&ssh_builder, screen, peer);
+    append_session_ssh_startup (&ssh_startup_builder, screen, peer);
   }
 
   guint selected = MAX (0, terminal_mdi_container_get_active_screen_num (container));
@@ -979,7 +1005,9 @@ terminal_app_save_session (TerminalApp *app,
                                               g_variant_new ("(ua(ayay))", selected, &builder));
   gboolean saved_ssh = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY,
                                              g_variant_builder_end (&ssh_builder));
-  if (!saved_tabs || !saved_ssh) {
+  gboolean saved_ssh_startup = g_settings_set_value (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY,
+                                                     g_variant_builder_end (&ssh_startup_builder));
+  if (!saved_tabs || !saved_ssh || !saved_ssh_startup) {
     g_settings_revert (settings);
     return;
   }
@@ -1000,17 +1028,37 @@ new_session_screen (GSettings *profile,
                     const char *directory,
                     char **child_env,
                     const char *ssh_command,
-                    const char *ssh_credential)
+                    const char *ssh_credential,
+                    const char *ssh_directory,
+                    const char *ssh_login_command)
 {
-  if (!g_path_is_absolute (directory) || !g_file_test (directory, G_FILE_TEST_IS_DIR))
+  if (directory == NULL || !g_path_is_absolute (directory) || !g_file_test (directory, G_FILE_TEST_IS_DIR))
     directory = g_get_home_dir ();
 
   TerminalScreen *screen = terminal_screen_new (profile, NULL, NULL, NULL,
                                                  directory, child_env, 1.0);
   terminal_screen_set_force_shell (screen);
-  if (ssh_command != NULL && *ssh_command != '\0')
+  if (ssh_command != NULL && *ssh_command != '\0') {
     terminal_screen_set_startup_ssh (screen, ssh_command, ssh_credential);
+    terminal_screen_set_startup_ssh_directory (screen, ssh_directory);
+    terminal_screen_set_ssh_login_command (screen, ssh_login_command);
+  }
   return screen;
+}
+
+static void
+add_session_screens (TerminalWindow *window,
+                     TerminalScreen *screen,
+                     TerminalScreen *peer)
+{
+  if (peer != NULL) {
+    terminal_notebook_add_split (TERMINAL_NOTEBOOK (terminal_window_get_mdi_container (window)),
+                                 screen, peer);
+    _terminal_screen_launch_child_on_idle (peer);
+  } else {
+    terminal_window_add_screen (window, screen, -1);
+  }
+  _terminal_screen_launch_child_on_idle (screen);
 }
 
 gboolean
@@ -1030,35 +1078,39 @@ terminal_app_restore_session (TerminalApp *app,
     return FALSE;
 
   gs_unref_variant GVariant *ssh_config = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
-  gsize ssh_count = g_variant_n_children (ssh_config);
+  gs_unref_variant GVariant *ssh_startup = g_settings_get_value (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY);
 
   gs_unref_object GSettings *profile = terminal_settings_list_ref_default_child (app->profiles_list);
   TerminalWindow *window = terminal_app_new_window (app, 0);
   if (startup_id != NULL)
     gtk_window_set_startup_id (GTK_WINDOW (window), startup_id);
 
-  TerminalMdiContainer *container = TERMINAL_MDI_CONTAINER (terminal_window_get_mdi_container (window));
-  GVariantIter iter, ssh_iter;
+  GVariantIter iter, ssh_iter, ssh_startup_iter;
   const char *directory, *peer_directory;
   TerminalScreen *active = NULL;
   guint index = 0;
   g_variant_iter_init (&iter, tabs);
   g_variant_iter_init (&ssh_iter, ssh_config);
+  g_variant_iter_init (&ssh_startup_iter, ssh_startup);
+  gsize ssh_count = g_variant_iter_n_children (&ssh_iter);
+  gsize ssh_startup_count = g_variant_iter_n_children (&ssh_startup_iter);
   while (g_variant_iter_next (&iter, "(^&ay^&ay)", &directory, &peer_directory)) {
     const char *command = NULL, *credential = NULL;
     const char *peer_command = NULL, *peer_credential = NULL;
+    const char *ssh_directory = NULL, *login_command = NULL;
+    const char *peer_ssh_directory = NULL, *peer_login_command = NULL;
     if (index < ssh_count)
       g_variant_iter_next (&ssh_iter, "((&s&s)(&s&s))", &command, &credential, &peer_command, &peer_credential);
+    if (index < ssh_startup_count)
+      g_variant_iter_next (&ssh_startup_iter, "((^&ay&s)(^&ay&s))",
+                           &ssh_directory, &login_command, &peer_ssh_directory, &peer_login_command);
 
-    TerminalScreen *screen = new_session_screen (profile, directory, child_env, command, credential);
-    if (*peer_directory != '\0') {
-      TerminalScreen *peer = new_session_screen (profile, peer_directory, child_env, peer_command, peer_credential);
-      terminal_notebook_add_split (TERMINAL_NOTEBOOK (container), screen, peer);
-      _terminal_screen_launch_child_on_idle (peer);
-    } else {
-      terminal_window_add_screen (window, screen, -1);
-    }
-    _terminal_screen_launch_child_on_idle (screen);
+    TerminalScreen *screen = new_session_screen (profile, directory, child_env, command, credential,
+                                                  ssh_directory, login_command);
+    TerminalScreen *peer = *peer_directory != '\0' ?
+      new_session_screen (profile, peer_directory, child_env, peer_command, peer_credential,
+                          peer_ssh_directory, peer_login_command) : NULL;
+    add_session_screens (window, screen, peer);
     if (active == NULL || index == selected)
       active = screen;
     ++index;
@@ -1070,7 +1122,56 @@ terminal_app_restore_session (TerminalApp *app,
   g_settings_delay (settings);
   g_settings_reset (settings, TERMINAL_SETTING_SESSION_KEY);
   g_settings_reset (settings, TERMINAL_SETTING_SESSION_SSH_KEY);
+  g_settings_reset (settings, TERMINAL_SETTING_SESSION_SSH_STARTUP_KEY);
   g_settings_apply (settings);
+  return TRUE;
+}
+
+gboolean
+terminal_app_open_ssh_project (TerminalApp *app,
+                               TerminalWindow *window,
+                               GSettings *profile,
+                               char **child_env,
+                               const char *command,
+                               const char *credential,
+                               const char *remote_directory,
+                               const char *login_command,
+                               gboolean split,
+                               GError **error)
+{
+  g_return_val_if_fail (TERMINAL_IS_APP (app), FALSE);
+  g_return_val_if_fail (TERMINAL_IS_WINDOW (window), FALSE);
+  g_return_val_if_fail (G_IS_SETTINGS (profile), FALSE);
+
+  if (command == NULL || *command == '\0' ||
+      remote_directory == NULL || !g_path_is_absolute (remote_directory)) {
+    g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                         _("A remote project needs an SSH command and an absolute directory"));
+    return FALSE;
+  }
+
+  gs_free char *screen_credential = NULL, *peer_credential = NULL;
+  if (credential != NULL && *credential != '\0') {
+    screen_credential = terminal_ssh_dup_password (credential, error);
+    if (screen_credential == NULL)
+      return FALSE;
+
+    if (split) {
+      peer_credential = terminal_ssh_dup_password (credential, error);
+      if (peer_credential == NULL) {
+        terminal_ssh_forget_password (screen_credential);
+        return FALSE;
+      }
+    }
+  }
+
+  TerminalScreen *screen = new_session_screen (profile, NULL, child_env,
+                                                command, screen_credential, remote_directory, login_command);
+  TerminalScreen *peer = split ? new_session_screen (profile, NULL, child_env,
+                                                      command, peer_credential, remote_directory, login_command) : NULL;
+  add_session_screens (window, screen, peer);
+  terminal_window_switch_screen (window, screen);
+  gtk_widget_grab_focus (GTK_WIDGET (screen));
   return TRUE;
 }
 

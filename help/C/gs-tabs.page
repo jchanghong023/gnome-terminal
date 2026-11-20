@@ -46,12 +46,18 @@
 
   <p>Use <gui>Add Working Directory…</gui> to choose a project directory,
   or click <gui>Add Current Directory</gui> next to it to save the active
-  terminal's current local directory. Neither action opens a tab.
+  terminal's current directory. In a terminal connected through
+  <gui>SSH on Reopen</gui>, this saves a remote project. If the remote
+  shell has not reported its directory, enter the absolute path when
+  prompted. Neither action opens a tab.
   Each project has two add buttons. <gui>New terminal in this project</gui>
   opens a single terminal. <gui>New split terminal tab in this project</gui>
   (the plus with a split icon) opens two independent terminals side by side,
   each taking half the available width. Both start in the project's
   directory and share one sidebar row.</p>
+  <p>For a remote project, either button reconnects over SSH and opens the
+  bookmarked directory. <gui>SSH on Reopen</gui> also lets you specify a
+  starting directory and an optional command to run after SSH login.</p>
 
   <p>In a split tab, click either pane to direct typing and terminal
   shortcuts to it. Closing the tab closes both terminals. If one shell
