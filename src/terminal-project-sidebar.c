@@ -10,18 +10,23 @@
 #include "terminal-project-sidebar.h"
 #include "terminal-schemas.h"
 
-#define SIDEBAR_WIDTH 268
 #define PROJECT_TERMINAL_INDENT 76
 #define SCREEN_KEY "terminal-project-screen"
 #define DIRECTORY_KEY "terminal-project-directory"
 #define PROJECT_ROW_KEY "terminal-project-row"
 #define PROJECT_NAME_KEY "terminal-project-search-name"
+#define PROJECT_TOGGLE_KEY "terminal-project-toggle"
+#define PROJECT_COUNT_KEY "terminal-project-count"
 
 typedef struct {
   TerminalWindow *window;
   TerminalMdiContainer *container;
   GSettings *settings;
   GHashTable *collapsed;
+  GtkListBoxRow *active_project;
+  GtkListBoxRow *search_target;
+  GtkWidget *search;
+  GtkScrolledWindow *scroll;
   char *search_query;
 } ProjectSidebar;
 
@@ -57,6 +62,20 @@ get_project_row (GtkListBoxRow *row)
   if (g_object_get_data (G_OBJECT (row), DIRECTORY_KEY) != NULL)
     return row;
   return g_object_get_data (G_OBJECT (row), PROJECT_ROW_KEY);
+}
+
+static void
+mark_row (GtkListBoxRow **current,
+          GtkListBoxRow *row,
+          const char *style_class)
+{
+  if (*current == row)
+    return;
+  if (*current != NULL)
+    gtk_style_context_remove_class (gtk_widget_get_style_context (GTK_WIDGET (*current)), style_class);
+  *current = row;
+  if (row != NULL)
+    gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (row)), style_class);
 }
 
 static void
@@ -124,6 +143,7 @@ search_projects (GtkSearchEntry *entry,
   ProjectSidebar *sidebar = get_sidebar (list);
   gs_free char *text = g_strdup (gtk_entry_get_text (GTK_ENTRY (entry)));
 
+  mark_row (&sidebar->search_target, NULL, "project-search-target");
   g_strstrip (text);
   g_free (sidebar->search_query);
   sidebar->search_query = *text != '\0' ? g_utf8_casefold (text, -1) : NULL;
@@ -143,20 +163,63 @@ update_project_expander (GtkWidget *button,
 }
 
 static void
+update_collapsed_projects (GtkListBox *list)
+{
+  ProjectSidebar *sidebar = get_sidebar (list);
+  gs_free char **uris = g_settings_get_strv (sidebar->settings, TERMINAL_SETTING_COLLAPSED_PROJECTS_KEY);
+  GtkListBoxRow *row;
+
+  g_hash_table_remove_all (sidebar->collapsed);
+  for (char **uri = uris; *uri != NULL; uri++)
+    g_hash_table_add (sidebar->collapsed, *uri);
+
+  for (int i = 0; (row = gtk_list_box_get_row_at_index (list, i)) != NULL; i++) {
+    GtkWidget *toggle = g_object_get_data (G_OBJECT (row), PROJECT_TOGGLE_KEY);
+    if (toggle != NULL) {
+      const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
+      GtkImage *icon = g_object_get_data (G_OBJECT (toggle), "project-expander");
+      update_project_expander (toggle, icon, g_hash_table_contains (sidebar->collapsed, uri));
+    }
+  }
+
+  gtk_list_box_invalidate_filter (list);
+  mark_row (&sidebar->search_target, NULL, "project-search-target");
+  select_terminal (list, terminal_mdi_container_get_active_screen (sidebar->container));
+}
+
+static void
+set_project_collapsed (ProjectSidebar *sidebar,
+                       const char *uri,
+                       gboolean collapsed)
+{
+  GVariantBuilder builder;
+  GHashTableIter iter;
+  gpointer key;
+
+  if (g_hash_table_contains (sidebar->collapsed, uri) == collapsed)
+    return;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE_STRING_ARRAY);
+  g_hash_table_iter_init (&iter, sidebar->collapsed);
+  while (g_hash_table_iter_next (&iter, &key, NULL))
+    if (!g_str_equal (key, uri))
+      g_variant_builder_add (&builder, "s", key);
+  if (collapsed)
+    g_variant_builder_add (&builder, "s", uri);
+
+  if (!g_settings_set_value (sidebar->settings, TERMINAL_SETTING_COLLAPSED_PROJECTS_KEY,
+                             g_variant_builder_end (&builder)))
+    show_error (sidebar->window, _("Could not save the project’s collapsed state"), NULL);
+}
+
+static void
 toggle_project (GtkButton *button,
                 GtkListBoxRow *row)
 {
-  GtkListBox *list = get_row_list (row);
-  ProjectSidebar *sidebar = get_sidebar (list);
+  ProjectSidebar *sidebar = get_sidebar (get_row_list (row));
   const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
-  GtkImage *icon = g_object_get_data (G_OBJECT (button), "project-expander");
-  gboolean collapsed = !g_hash_table_remove (sidebar->collapsed, uri);
 
-  if (collapsed)
-    g_hash_table_add (sidebar->collapsed, g_strdup (uri));
-  update_project_expander (GTK_WIDGET (button), icon, collapsed);
-  gtk_list_box_invalidate_filter (list);
-  select_terminal (list, terminal_mdi_container_get_active_screen (sidebar->container));
+  set_project_collapsed (sidebar, uri, !g_hash_table_contains (sidebar->collapsed, uri));
 }
 
 static void
@@ -179,7 +242,7 @@ open_project_terminal (GtkButton *button,
     terminal_settings_list_ref_default_child (terminal_app_get_profiles_list (app));
   TerminalScreen *active = terminal_mdi_container_get_active_screen (sidebar->container);
 
-  g_hash_table_remove (sidebar->collapsed, uri);
+  set_project_collapsed (sidebar, uri, FALSE);
   terminal_app_new_terminal (app, sidebar->window, profile, NULL, NULL, NULL, path,
                              active ? terminal_screen_get_initial_environment (active) : NULL,
                              1.0);
@@ -199,12 +262,50 @@ remove_project (GtkMenuItem *item,
   update_project_directory (get_row_list (row), g_object_get_data (G_OBJECT (row), DIRECTORY_KEY), NULL);
 }
 
+static gboolean
+save_project_directories (ProjectSidebar *sidebar,
+                          char **projects)
+{
+  if (g_settings_set_strv (sidebar->settings, TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY,
+                           (const char * const *) projects))
+    return TRUE;
+  show_error (sidebar->window, _("Could not save the project list"), NULL);
+  return FALSE;
+}
+
+static void
+move_project (GtkMenuItem *item,
+              GtkListBoxRow *row)
+{
+  ProjectSidebar *sidebar = get_sidebar (get_row_list (row));
+  gs_strfreev char **projects = g_settings_get_strv (sidebar->settings,
+                                                    TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY);
+  const char *uri = g_object_get_data (G_OBJECT (row), DIRECTORY_KEY);
+  int direction = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (item), "move-project-direction"));
+
+  for (int i = 0; projects[i] != NULL; i++)
+    if (g_str_equal (projects[i], uri)) {
+      int next = i + direction;
+      if (next >= 0 && projects[next] != NULL) {
+        char *moved = projects[i];
+        projects[i] = projects[next];
+        projects[next] = moved;
+        save_project_directories (sidebar, projects);
+      }
+      return;
+    }
+}
+
 static GtkWidget *
-new_project_menu (GtkListBoxRow *row)
+new_project_menu (GtkListBoxRow *row,
+                  gboolean can_move_up,
+                  gboolean can_move_down)
 {
   GtkWidget *button = gtk_menu_button_new ();
   GtkWidget *menu = gtk_menu_new ();
   GtkWidget *change = gtk_menu_item_new_with_mnemonic (_("_Change Directory…"));
+  GtkWidget *up = gtk_menu_item_new_with_mnemonic (_("Move Project _Up"));
+  GtkWidget *down = gtk_menu_item_new_with_mnemonic (_("Move Project _Down"));
   GtkWidget *remove = gtk_menu_item_new_with_mnemonic (_("_Remove Project"));
 
   gtk_button_set_image (GTK_BUTTON (button),
@@ -212,9 +313,18 @@ new_project_menu (GtkListBoxRow *row)
   gtk_button_set_relief (GTK_BUTTON (button), GTK_RELIEF_NONE);
   gtk_widget_set_tooltip_text (button, _("Project options"));
   atk_object_set_name (gtk_widget_get_accessible (button), _("Project options"));
+  gtk_widget_set_sensitive (up, can_move_up);
+  gtk_widget_set_sensitive (down, can_move_down);
+  g_object_set_data (G_OBJECT (up), "move-project-direction", GINT_TO_POINTER (-1));
+  g_object_set_data (G_OBJECT (down), "move-project-direction", GINT_TO_POINTER (1));
+  g_signal_connect_object (up, "activate", G_CALLBACK (move_project), row, 0);
+  g_signal_connect_object (down, "activate", G_CALLBACK (move_project), row, 0);
   g_signal_connect_object (change, "activate", G_CALLBACK (change_project_directory), row, 0);
   g_signal_connect_object (remove, "activate", G_CALLBACK (remove_project), row, 0);
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), change);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), up);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), down);
+  gtk_menu_shell_append (GTK_MENU_SHELL (menu), gtk_separator_menu_item_new ());
   gtk_menu_shell_append (GTK_MENU_SHELL (menu), remove);
   gtk_widget_show_all (menu);
   gtk_menu_button_set_popup (GTK_MENU_BUTTON (button), menu);
@@ -223,7 +333,9 @@ new_project_menu (GtkListBoxRow *row)
 
 static GtkWidget *
 new_group_row (GtkListBox *list,
-               const char *uri)
+               const char *uri,
+               gboolean can_move_up,
+               gboolean can_move_down)
 {
   GtkWidget *row = gtk_list_box_row_new ();
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -248,7 +360,8 @@ new_group_row (GtkListBox *list,
     GtkWidget *heading = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
     GtkWidget *icon = gtk_image_new ();
     GtkWidget *folder = gtk_image_new_from_icon_name ("folder-symbolic", GTK_ICON_SIZE_MENU);
-    GtkWidget *menu = new_project_menu (GTK_LIST_BOX_ROW (row));
+    GtkWidget *count = gtk_label_new (NULL);
+    GtkWidget *menu = new_project_menu (GTK_LIST_BOX_ROW (row), can_move_up, can_move_down);
 
     label = new_label (title);
     gtk_button_set_relief (GTK_BUTTON (toggle), GTK_RELIEF_NONE);
@@ -256,6 +369,8 @@ new_group_row (GtkListBox *list,
     atk_object_set_name (gtk_widget_get_accessible (toggle), title);
     g_object_set_data_full (G_OBJECT (row), DIRECTORY_KEY, g_strdup (uri), g_free);
     g_object_set_data_full (G_OBJECT (row), PROJECT_NAME_KEY, g_utf8_casefold (title, -1), g_free);
+    g_object_set_data (G_OBJECT (row), PROJECT_TOGGLE_KEY, toggle);
+    g_object_set_data (G_OBJECT (row), PROJECT_COUNT_KEY, count);
     g_object_set_data (G_OBJECT (toggle), "project-expander", icon);
     update_project_expander (toggle, GTK_IMAGE (icon),
                              g_hash_table_contains (get_sidebar (list)->collapsed, uri));
@@ -266,6 +381,10 @@ new_group_row (GtkListBox *list,
     gtk_container_add (GTK_CONTAINER (toggle), heading);
     gtk_box_pack_start (GTK_BOX (box), toggle, TRUE, TRUE, 0);
     g_signal_connect (button, "clicked", G_CALLBACK (open_project_terminal), row);
+    gtk_style_context_add_class (gtk_widget_get_style_context (count), "dim-label");
+    gtk_widget_set_margin_start (count, 4);
+    gtk_widget_set_tooltip_text (count, _("Open terminals"));
+    gtk_box_pack_start (GTK_BOX (box), count, FALSE, FALSE, 0);
     gtk_box_pack_end (GTK_BOX (box), menu, FALSE, FALSE, 0);
     gtk_box_pack_end (GTK_BOX (box), button, FALSE, FALSE, 0);
   } else {
@@ -409,7 +528,11 @@ static void
 select_terminal (GtkListBox *list,
                  TerminalScreen *screen)
 {
+  ProjectSidebar *sidebar = get_sidebar (list);
   GtkListBoxRow *row = find_terminal_row (list, screen);
+  GtkListBoxRow *project = row != NULL ? get_project_row (row) : NULL;
+
+  mark_row (&sidebar->active_project, project, "active-project");
 
   gtk_list_box_select_row (list, row != NULL && gtk_widget_get_child_visible (GTK_WIDGET (row))
                                 ? row : NULL);
@@ -429,9 +552,11 @@ rebuild_rows (GtkListBox *list)
   char **project;
   gboolean has_other = FALSE;
 
+  sidebar->active_project = NULL;
+  sidebar->search_target = NULL;
   gtk_container_foreach (GTK_CONTAINER (list), (GtkCallback) gtk_widget_destroy, NULL);
   for (project = projects; *project != NULL; project++) {
-    GtkWidget *row = new_group_row (list, *project);
+    GtkWidget *row = new_group_row (list, *project, project != projects, project[1] != NULL);
     gtk_list_box_insert (list, row, -1);
     g_hash_table_insert (tails, g_file_new_for_uri (*project), row);
   }
@@ -463,11 +588,25 @@ rebuild_rows (GtkListBox *list)
       g_hash_table_insert (tails, g_steal_pointer (&directory), row);
     } else {
       if (!has_other) {
-        gtk_list_box_insert (list, new_group_row (list, NULL), -1);
+        gtk_list_box_insert (list, new_group_row (list, NULL, FALSE, FALSE), -1);
         has_other = TRUE;
       }
       gtk_list_box_insert (list, row, -1);
     }
+  }
+
+  GHashTableIter iter;
+  gpointer value;
+  g_hash_table_iter_init (&iter, tails);
+  while (g_hash_table_iter_next (&iter, NULL, &value)) {
+    GtkListBoxRow *tail = value;
+    GtkListBoxRow *group = get_project_row (tail);
+    GtkLabel *count = g_object_get_data (G_OBJECT (group), PROJECT_COUNT_KEY);
+    int n_tabs = gtk_list_box_row_get_index (tail) - gtk_list_box_row_get_index (group);
+    char text[32];
+
+    g_snprintf (text, sizeof text, "%d", n_tabs);
+    gtk_label_set_text (count, text);
   }
 
   gtk_widget_show_all (GTK_WIDGET (list));
@@ -537,6 +676,124 @@ get_project_tab_at_index (GtkListBox *list,
   return row;
 }
 
+static GtkListBoxRow *
+search_result_terminal (GtkListBox *list,
+                        GtkListBoxRow *row)
+{
+  if (!gtk_widget_get_child_visible (GTK_WIDGET (row)))
+    return NULL;
+  if (g_object_get_data (G_OBJECT (row), SCREEN_KEY) != NULL)
+    return row;
+  if (get_project_row (row) == row) {
+    GtkListBoxRow *first = get_project_tab_at_index (list, gtk_list_box_row_get_index (row) + 1, row);
+
+    /* A collapsed heading acts as the result for its first terminal. */
+    if (first != NULL && !gtk_widget_get_child_visible (GTK_WIDGET (first)))
+      return first;
+  }
+  return NULL;
+}
+
+static GtkListBoxRow *
+find_search_result (GtkListBox *list,
+                    GtkListBoxRow *current,
+                    int step)
+{
+  GtkListBoxRow *row, *last = NULL;
+
+  if (current == NULL && step < 0) {
+    for (int i = 0; (row = gtk_list_box_get_row_at_index (list, i)) != NULL; i++)
+      if (search_result_terminal (list, row) != NULL)
+        last = row;
+    return last;
+  }
+
+  int i = current != NULL ? gtk_list_box_row_get_index (current) + step : 0;
+  for (; i >= 0 && (row = gtk_list_box_get_row_at_index (list, i)) != NULL; i += step)
+    if (search_result_terminal (list, row) != NULL)
+      return row;
+  return current;
+}
+
+static gboolean
+search_key_pressed (GtkWidget *entry,
+                    GdkEventKey *event,
+                    GtkListBox *list)
+{
+  ProjectSidebar *sidebar = get_sidebar (list);
+  int step;
+
+  if ((event->state & gtk_accelerator_get_default_mod_mask ()) != 0)
+    return FALSE;
+
+  switch (event->keyval) {
+    case GDK_KEY_Escape: {
+      TerminalScreen *screen = terminal_mdi_container_get_active_screen (sidebar->container);
+      gtk_entry_set_text (GTK_ENTRY (entry), "");
+      if (screen != NULL)
+        gtk_widget_grab_focus (GTK_WIDGET (screen));
+      return TRUE;
+    }
+    case GDK_KEY_Up:
+    case GDK_KEY_KP_Up:
+      step = -1;
+      break;
+    case GDK_KEY_Down:
+    case GDK_KEY_KP_Down:
+      step = 1;
+      break;
+    default:
+      return FALSE;
+  }
+
+  GtkListBoxRow *row = find_search_result (list, sidebar->search_target, step);
+  mark_row (&sidebar->search_target, row, "project-search-target");
+  if (row != NULL) {
+    int x, y;
+    if (gtk_widget_translate_coordinates (GTK_WIDGET (row), GTK_WIDGET (list), 0, 0, &x, &y))
+      gtk_adjustment_clamp_page (gtk_scrolled_window_get_vadjustment (sidebar->scroll), y,
+                                 y + gtk_widget_get_allocated_height (GTK_WIDGET (row)));
+  }
+  return TRUE;
+}
+
+static void
+search_activate (GtkEntry *entry,
+                 GtkListBox *list)
+{
+  ProjectSidebar *sidebar = get_sidebar (list);
+  GtkListBoxRow *row = sidebar->search_target != NULL ? sidebar->search_target
+                                                     : find_search_result (list, NULL, 1);
+
+  if (row != NULL) {
+    GtkListBoxRow *terminal = search_result_terminal (list, row);
+    if (terminal != NULL)
+      activate_terminal (list, terminal, NULL);
+  }
+}
+
+static gboolean
+search_focus_out (GtkWidget *entry,
+                  GdkEventFocus *event,
+                  GtkListBox *list)
+{
+  mark_row (&get_sidebar (list)->search_target, NULL, "project-search-target");
+  return FALSE;
+}
+
+static void
+action_find_project (GSimpleAction *action,
+                     GVariant *parameter,
+                     gpointer user_data)
+{
+  GtkWidget *search = get_sidebar (user_data)->search;
+
+  if (gtk_widget_get_mapped (search)) {
+    gtk_widget_grab_focus (search);
+    gtk_editable_select_region (GTK_EDITABLE (search), 0, -1);
+  }
+}
+
 static void
 action_switch_project_tab (GSimpleAction *action,
                            GVariant *parameter,
@@ -576,6 +833,7 @@ update_project_directory (GtkListBox *list,
   gs_strfreev char **projects = g_settings_get_strv (sidebar->settings,
                                                     TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY);
   gs_free char *uri = directory != NULL ? g_file_get_uri (directory) : NULL;
+  gs_free char *old_project = NULL;
   int index = -1;
   guint n;
 
@@ -599,19 +857,16 @@ update_project_directory (GtkListBox *list,
   } else if (index < 0) {
     return;
   } else {
-    g_free (projects[index]);
+    old_project = projects[index];
     if (uri != NULL)
       projects[index] = g_steal_pointer (&uri);
     else
       for (guint i = index; i < n; i++)
         projects[i] = projects[i + 1];
-    /* Saving can rebuild the list and free the row's old URI. */
-    g_hash_table_remove (sidebar->collapsed, old_uri);
   }
 
-  if (!g_settings_set_strv (sidebar->settings, TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY,
-                           (const char * const *) projects))
-    show_error (sidebar->window, _("Could not save the project list"), NULL);
+  if (save_project_directories (sidebar, projects) && old_project != NULL)
+    set_project_collapsed (sidebar, old_project, FALSE);
 }
 
 static void
@@ -693,9 +948,9 @@ terminal_project_sidebar_new (TerminalWindow *window,
 {
   static const GActionEntry actions[] = {
     { "set-title", action_set_title, NULL, NULL, NULL },
+    { "find-project", action_find_project, NULL, NULL, NULL },
     { "project-tab-switch", action_switch_project_tab, "b", NULL, NULL }
   };
-  GtkWidget *outer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
   GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   GtkWidget *search = gtk_search_entry_new ();
   GtkWidget *scroll = gtk_scrolled_window_new (NULL, NULL);
@@ -704,18 +959,19 @@ terminal_project_sidebar_new (TerminalWindow *window,
   GtkWidget *footer = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
   GtkWidget *add = gtk_button_new_with_mnemonic (_("_Add Working Directory…"));
   GtkWidget *pin = new_icon_button ("bookmark-new-symbolic", _("Add Current Directory"));
-  ProjectSidebar *sidebar = g_new (ProjectSidebar, 1);
+  ProjectSidebar *sidebar = g_new0 (ProjectSidebar, 1);
 
   sidebar->window = window;
   sidebar->container = container;
   sidebar->settings = terminal_app_get_global_settings (terminal_app_get ());
+  sidebar->search = search;
+  sidebar->scroll = GTK_SCROLLED_WINDOW (scroll);
   sidebar->collapsed = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-  sidebar->search_query = NULL;
   g_object_set_data_full (G_OBJECT (list), "terminal-project-sidebar", sidebar, free_sidebar);
   g_action_map_add_action_entries (G_ACTION_MAP (window), actions, G_N_ELEMENTS (actions), list);
   gtk_list_box_set_filter_func (GTK_LIST_BOX (list), filter_sidebar_row, sidebar, NULL);
 
-  gtk_widget_set_size_request (column, SIDEBAR_WIDTH, -1);
+  gtk_widget_set_size_request (column, 200, -1);
   gtk_entry_set_placeholder_text (GTK_ENTRY (search), _("Search projects"));
   atk_object_set_name (gtk_widget_get_accessible (search), _("Search projects"));
   gtk_widget_set_margin_start (search, 6);
@@ -741,24 +997,28 @@ terminal_project_sidebar_new (TerminalWindow *window,
   gtk_box_pack_start (GTK_BOX (column), search, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (column), scroll, TRUE, TRUE, 0);
   gtk_box_pack_end (GTK_BOX (column), footer, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (outer), column, TRUE, TRUE, 0);
-  gtk_box_pack_end (GTK_BOX (outer), gtk_separator_new (GTK_ORIENTATION_VERTICAL), FALSE, FALSE, 0);
-  gtk_widget_show_all (outer);
-  gtk_widget_set_no_show_all (outer, TRUE);
-  g_object_bind_property_full (container, "tab-pos", outer, "visible", G_BINDING_SYNC_CREATE,
+  gtk_widget_show_all (column);
+  gtk_widget_set_no_show_all (column, TRUE);
+  g_object_bind_property_full (container, "tab-pos", column, "visible", G_BINDING_SYNC_CREATE,
                                show_sidebar_on_left, NULL, NULL, NULL);
 
   g_signal_connect_object (sidebar->settings, "changed::" TERMINAL_SETTING_PROJECT_DIRECTORIES_KEY,
                            G_CALLBACK (rebuild_rows), list, G_CONNECT_SWAPPED);
+  g_signal_connect_object (sidebar->settings, "changed::" TERMINAL_SETTING_COLLAPSED_PROJECTS_KEY,
+                           G_CALLBACK (update_collapsed_projects), list, G_CONNECT_SWAPPED);
   g_signal_connect_object (container, "screen-added", G_CALLBACK (screen_added), list, G_CONNECT_AFTER);
   g_signal_connect_object (container, "screen-removed", G_CALLBACK (screen_removed), list, G_CONNECT_AFTER);
   g_signal_connect_object (container, "screen-switched", G_CALLBACK (screen_switched), list, G_CONNECT_AFTER);
   g_signal_connect_object (container, "screens-reordered", G_CALLBACK (rebuild_rows), list,
                            G_CONNECT_SWAPPED | G_CONNECT_AFTER);
   g_signal_connect (list, "row-activated", G_CALLBACK (activate_terminal), NULL);
-  g_signal_connect_object (search, "search-changed", G_CALLBACK (search_projects), list, 0);
+  g_signal_connect_object (search, "changed", G_CALLBACK (search_projects), list, 0);
+  g_signal_connect_object (search, "key-press-event", G_CALLBACK (search_key_pressed), list, 0);
+  g_signal_connect_object (search, "focus-out-event", G_CALLBACK (search_focus_out), list, 0);
+  g_signal_connect_object (search, "activate", G_CALLBACK (search_activate), list, 0);
   g_signal_connect_object (add, "clicked", G_CALLBACK (add_directory), list, 0);
   g_signal_connect_object (pin, "clicked", G_CALLBACK (add_current_directory), list, 0);
+  update_collapsed_projects (GTK_LIST_BOX (list));
   rebuild_rows (GTK_LIST_BOX (list));
-  return outer;
+  return column;
 }

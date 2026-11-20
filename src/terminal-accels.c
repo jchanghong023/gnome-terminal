@@ -59,6 +59,7 @@
 #define KEY_FIND_CLEAR          "find-clear"
 #define KEY_FIND_PREV           "find-previous"
 #define KEY_FIND_NEXT           "find-next"
+#define KEY_FIND_PROJECT        "find-project"
 #define KEY_FULL_SCREEN         "full-screen"
 #define KEY_HELP                "help"
 #define KEY_MOVE_TAB_LEFT       "move-tab-left"
@@ -150,7 +151,8 @@ static KeyEntry search_entries[] = {
   ENTRY (N_("Find"),            KEY_FIND,       "find",          NULL, NULL),
   ENTRY (N_("Find Next"),       KEY_FIND_NEXT,  "find-forward",  NULL, NULL),
   ENTRY (N_("Find Previous"),   KEY_FIND_PREV,  "find-backward", NULL, NULL),
-  ENTRY (N_("Clear Highlight"), KEY_FIND_CLEAR, "find-clear",    NULL, NULL)
+  ENTRY (N_("Clear Highlight"), KEY_FIND_CLEAR, "find-clear",    NULL, NULL),
+  ENTRY (N_("Search Projects"), KEY_FIND_PROJECT, "find-project", NULL, NULL)
 };
 
 static KeyEntry view_entries[] = {

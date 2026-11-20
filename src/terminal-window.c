@@ -2166,11 +2166,14 @@ terminal_window_init (TerminalWindow *window)
                       G_CALLBACK (handle_tab_droped_on_desktop), window);
   }
 
-  GtkWidget *content = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *content = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
   GtkWidget *sidebar = terminal_project_sidebar_new (window, priv->mdi_container);
 
-  gtk_box_pack_start (GTK_BOX (content), sidebar, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (content), GTK_WIDGET (priv->mdi_container), TRUE, TRUE, 0);
+  gtk_paned_pack1 (GTK_PANED (content), sidebar, FALSE, FALSE);
+  gtk_paned_pack2 (GTK_PANED (content), GTK_WIDGET (priv->mdi_container), TRUE, FALSE);
+  g_settings_bind (terminal_app_get_global_settings (app),
+                   TERMINAL_SETTING_PROJECT_SIDEBAR_WIDTH_KEY, content, "position",
+                   G_SETTINGS_BIND_GET | G_SETTINGS_BIND_SET | G_SETTINGS_BIND_GET_NO_CHANGES);
   gtk_box_pack_end (GTK_BOX (priv->main_vbox), content, TRUE, TRUE, 0);
   gtk_widget_show (content);
   gtk_widget_show (GTK_WIDGET (priv->mdi_container));

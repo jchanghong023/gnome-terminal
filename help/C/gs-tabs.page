@@ -32,12 +32,17 @@
   <title>Use tabs</title>
 
   <p>By default, <app>Terminal</app> lists sessions in the left sidebar, one
-  title per row. Click a title to switch to that terminal.</p>
+  title per row. Click a title to switch to that terminal. Drag the divider to
+  resize the sidebar. Its width is saved for new windows.</p>
 
   <p>Type a project name in <gui>Search projects</gui> at the top of the
-  sidebar. Only matching projects and their expanded tabs are shown.
-  Clearing the search restores the full list without switching terminals
-  or changing which projects are collapsed.</p>
+  sidebar, or focus the field with
+  <keyseq><key>Ctrl</key><key>Shift</key><key>P</key></keyseq>.
+  Use <key>Up</key> or <key>Down</key> to select a result and
+  <key>Enter</key> to switch to an existing terminal. A collapsed result
+  switches to its first terminal without expanding it. Press <key>Esc</key>
+  to clear the search and return focus to the terminal. Searching never
+  opens a new tab or changes which projects are collapsed.</p>
 
   <p>Use <gui>Add Working Directory…</gui> to choose a project directory,
   or click <gui>Add Current Directory</gui> next to it to save the active
@@ -45,14 +50,16 @@
   The <gui>+</gui> button next to a project opens a terminal in its
   directory.</p>
 
-  <p>Use <gui>Project options</gui> next to a project to change its
-  directory or remove it from the list. Existing terminals stay open.
-  The project list and its order are saved between launches, but open
+  <p>Use <gui>Project options</gui> to change or remove a project directory,
+  or to move a project up or down. Existing terminals stay open. The
+  project order and collapsed state are saved between launches, but open
   terminals are not restored by the sidebar.</p>
 
   <p>Tabs are grouped under the most specific saved project that contains
   their starting directory. Changing directory inside a terminal does
-  not move its tab. Click a project name to collapse or expand its tabs.</p>
+  not move its tab. Click a project name to collapse or expand its tabs.
+  The highlighted project contains the active terminal, even when collapsed.
+  The number next to each project counts its open terminals.</p>
 
   <p>To cycle through tabs in the active tab's project, use
   <keyseq><key>Alt</key><key>Page Up</key></keyseq> or

@@ -469,6 +469,10 @@
       <default>'&lt;Control&gt;&lt;Shift&gt;J'</default>
       <summary>Keyboard shortcut to clear the find highlighting</summary>
     </key>
+    <key name="find-project" type="s">
+      <default>'&lt;Control&gt;&lt;Shift&gt;P'</default>
+      <summary>Keyboard shortcut to focus the project search</summary>
+    </key>
     <key name="prev-tab" type="s">
       <default>'&lt;Control&gt;Page_Up'</default>
       <summary>Keyboard shortcut to switch to the previous tab</summary>
@@ -727,6 +731,16 @@
     <key name="project-directories" type="as">
       <default>[]</default>
       <summary>Manually added project directory URIs, in sidebar order</summary>
+    </key>
+
+    <key name="project-sidebar-width" type="i">
+      <default>268</default>
+      <summary>Width of the project sidebar in pixels</summary>
+    </key>
+
+    <key name="collapsed-project-directories" type="as">
+      <default>[]</default>
+      <summary>URIs of projects collapsed in the sidebar</summary>
     </key>
 
    <!-- <child name="profiles" schema="org.gnome.Terminal.ProfilesList" /> -->

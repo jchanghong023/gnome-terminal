@@ -138,6 +138,12 @@
           <attribute name="action">win.find-clear</attribute>
         </item>
       </section>
+      <section>
+        <item>
+          <attribute name="label" translatable="yes">Search _Projects</attribute>
+          <attribute name="action">win.find-project</attribute>
+        </item>
+      </section>
     </submenu>
     <submenu>
       <WITH_MNEMONIC><attribute name="label" translatable="yes">_Terminal</attribute></WITH_MNEMONIC>
